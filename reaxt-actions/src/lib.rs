@@ -1,0 +1,212 @@
+//! Server Actions: 1つの定義(`Action<I, O>`)をサーバーとブラウザで共有する。
+//!
+//! - サーバー: `Module::action(&ACTION, |ctx, input| ...)`(型付き。入力JSONは上限つきで読む)
+//! - クライアント: `call(&client, &ACTION, &input, |result| ...)`(コールバック式。非同期の応答で状態を更新する)
+//!
+//! 通信はConnect単純呼び出し(`POST /pkg.Service/Method`、本文JSON)のみで、RESTは作らない。
+use reaxt::backend::{Ctx, Denied, Module};
+use rust_json::{from_str_secure, to_string_strict, Limits};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::marker::PhantomData;
+
+#[cfg(target_arch = "wasm32")]
+pub mod web;
+
+/// 入力`I`・出力`O`の型つき呼び出し口の定義。`const`で作れて、両側で同じ値を使う。
+pub struct Action<I, O> {
+    pub service: &'static str,
+    pub method: &'static str,
+    _p: PhantomData<fn(I) -> O>,
+}
+
+impl<I, O> Action<I, O> {
+    pub const fn new(service: &'static str, method: &'static str) -> Self {
+        Action { service, method, _p: PhantomData }
+    }
+    pub fn path(&self) -> String {
+        format!("/{}/{}", self.service, self.method)
+    }
+}
+
+/// サーバー側の登録(`Module`の拡張)。
+pub trait ModuleActions: Sized {
+    fn action<I, O, F>(self, a: &Action<I, O>, f: F) -> Self
+    where
+        I: DeserializeOwned + 'static,
+        O: Serialize + 'static,
+        F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static;
+}
+
+impl ModuleActions for Module {
+    fn action<I, O, F>(self, a: &Action<I, O>, f: F) -> Self
+    where
+        I: DeserializeOwned + 'static,
+        O: Serialize + 'static,
+        F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static,
+    {
+        self.method(a.service, a.method, move |ctx, body| {
+            let input: I = from_str_secure(body, &Limits::small()).map_err(|e| Denied::new(400, e.to_string()))?;
+            let out = f(ctx, input)?;
+            to_string_strict(&out).map_err(|e| Denied::new(500, e.to_string()))
+        })
+    }
+}
+
+/// CSRF対策のガード: ブラウザの`WebClient`が付ける`x-reaxt: 1`を必須にする。
+/// カスタムヘッダは他オリジンのページからはCORSの事前確認なしに送れないため、
+/// 勝手なサイトからのフォーム送信やfetchを弾ける。`App::global_guard(csrf_guard)`で全体に掛ける。
+pub fn csrf_guard(ctx: &Ctx) -> Result<(), Denied> {
+    if ctx.header("x-reaxt") == Some("1") {
+        Ok(())
+    } else {
+        Err(Denied::new(403, "missing x-reaxt header"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionError {
+    /// 通信できなかった(fetch失敗など)
+    Transport(String),
+    /// サーバーが返したエラー(Connectのcode/message)
+    Server { status: u16, code: String, message: String },
+    /// 応答のJSONが期待した型でなかった
+    Decode(String),
+}
+
+pub type RawResult = Result<(u16, String), String>;
+
+/// HTTPで`POST`する部品(ブラウザ=fetch、テスト・SSR=同一プロセス)。応答はコールバックで返す。
+pub trait Client {
+    fn post(&self, path: &str, body: String, cb: Box<dyn FnOnce(RawResult)>);
+}
+
+#[derive(Deserialize)]
+struct ErrBody {
+    code: String,
+    message: String,
+}
+
+/// 型付きで呼び出す。`cb`は応答(または失敗)で1回だけ呼ばれる。
+pub fn call<I, O>(client: &dyn Client, a: &Action<I, O>, input: &I, cb: impl FnOnce(Result<O, ActionError>) + 'static)
+where
+    I: Serialize,
+    O: DeserializeOwned + 'static,
+{
+    let body = match to_string_strict(input) {
+        Ok(b) => b,
+        Err(e) => return cb(Err(ActionError::Decode(e.to_string()))),
+    };
+    client.post(
+        &a.path(),
+        body,
+        Box::new(move |raw| {
+            cb(match raw {
+                Err(e) => Err(ActionError::Transport(e)),
+                Ok((200, json)) => from_str_secure::<O>(&json, &Limits::small()).map_err(|e| ActionError::Decode(e.to_string())),
+                Ok((status, json)) => match from_str_secure::<ErrBody>(&json, &Limits::small()) {
+                    Ok(e) => Err(ActionError::Server { status, code: e.code, message: e.message }),
+                    Err(_) => Err(ActionError::Server { status, code: "unknown".into(), message: json }),
+                },
+            })
+        }),
+    );
+}
+
+/// 同一プロセスの`App`を直接呼ぶクライアント(テスト・SSR時のデータ取得用)。
+pub struct LocalClient<'a> {
+    pub app: &'a reaxt::app::App,
+    pub headers: Vec<(String, String)>,
+}
+
+impl Client for LocalClient<'_> {
+    fn post(&self, path: &str, body: String, cb: Box<dyn FnOnce(RawResult)>) {
+        let r = self.app.dispatch(&reaxt::app::Request { method: "POST", path, headers: &self.headers, body: &body });
+        cb(Ok((r.status, r.body)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reaxt::app::App;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct Add {
+        by: u32,
+    }
+    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    struct Total {
+        total: u32,
+    }
+    const ADD: Action<Add, Total> = Action::new("demo.v1.Counter", "Add");
+
+    fn app() -> App {
+        let counter = Arc::new(AtomicU32::new(0));
+        App::new("t")
+            .module(
+                Module::new()
+                    .guard(|c| if c.header("x-key") == Some("k") { Ok(()) } else { Err(Denied::new(401, "no key")) })
+                    .action(&ADD, move |_, i: Add| {
+                        if i.by > 100 {
+                            return Err(Denied::new(400, "too big"));
+                        }
+                        Ok(Total { total: counter.fetch_add(i.by, Ordering::SeqCst) + i.by })
+                    }),
+            )
+            .finish()
+    }
+
+    fn run<O: DeserializeOwned + 'static>(c: &LocalClient, a: &Action<Add, O>, by: u32) -> Result<O, ActionError> {
+        let out = Rc::new(RefCell::new(None));
+        let o2 = out.clone();
+        call(c, a, &Add { by }, move |r| *o2.borrow_mut() = Some(r));
+        let r = out.borrow_mut().take().expect("callback called once");
+        r
+    }
+
+    #[test]
+    fn typed_round_trip_errors_and_guard() {
+        let app = app();
+        let ok = LocalClient { app: &app, headers: vec![("x-key".into(), "k".into())] };
+        assert_eq!(run(&ok, &ADD, 2), Ok(Total { total: 2 }));
+        assert_eq!(run(&ok, &ADD, 3), Ok(Total { total: 5 }), "サーバー側の状態が保たれる");
+        match run(&ok, &ADD, 101) {
+            Err(ActionError::Server { status: 400, code, message }) => {
+                assert_eq!(code, "invalid_argument");
+                assert_eq!(message, "too big");
+            }
+            other => panic!("{other:?}"),
+        }
+        let anon = LocalClient { app: &app, headers: vec![] };
+        assert!(matches!(run(&anon, &ADD, 1), Err(ActionError::Server { status: 401, .. })));
+        // 型が合わない応答はDecodeエラー
+        const WRONG: Action<Add, Vec<String>> = Action::new("demo.v1.Counter", "Add");
+        assert!(matches!(run(&ok, &WRONG, 1), Err(ActionError::Decode(_))));
+    }
+
+    #[test]
+    fn csrf_guard_requires_custom_header() {
+        let app = App::new("t")
+            .global_guard(csrf_guard)
+            .module(Module::new().action(&ADD, |_, i: Add| Ok(Total { total: i.by })))
+            .finish();
+        let no = LocalClient { app: &app, headers: vec![] };
+        assert!(matches!(run(&no, &ADD, 1), Err(ActionError::Server { status: 403, .. })));
+        let yes = LocalClient { app: &app, headers: vec![("X-Reaxt".into(), "1".into())] };
+        assert_eq!(run(&yes, &ADD, 7), Ok(Total { total: 7 }));
+    }
+
+    #[test]
+    fn malformed_and_oversized_inputs_are_rejected_by_rs_json() {
+        let app = app();
+        let post = |b: &str| app.dispatch(&reaxt::app::Request { method: "POST", path: "/demo.v1.Counter/Add", headers: &[("x-key".into(), "k".into())], body: b });
+        assert_eq!(post("{\"by\":\"x\"}").status, 400);
+        assert_eq!(post("not json").status, 400);
+        let deep = format!("{}1{}", "[".repeat(100), "]".repeat(100));
+        assert_eq!(post(&deep).status, 400, "深さ上限");
+    }
+}

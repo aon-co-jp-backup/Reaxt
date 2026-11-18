@@ -108,8 +108,29 @@ impl Dom for WebDom {
     }
 }
 
+type Rt = Rc<RefCell<Runtime<WebDom>>>;
+
 thread_local! {
-    static RUNTIME: RefCell<Option<Rc<RefCell<Runtime<WebDom>>>>> = const { RefCell::new(None) };
+    static ALL: RefCell<Vec<Rt>> = const { RefCell::new(Vec::new()) };
+}
+
+fn register(rt: Rt) {
+    ALL.with(|a| a.borrow_mut().push(rt));
+    // クリック以外(fetch応答など)の更新から再描画できるよう、全体再描画をフックに登録
+    crate::hydrate::set_flush_hook(flush_all);
+}
+
+/// 更新(dirty)があれば、マウント済みの全アプリ/アイランドを再レンダー→差分適用する。
+/// 更新フラグは全体で1つなので、1つが消費して他が取りこぼすことが無いよう全部を回す。
+pub fn flush_all() {
+    if !crate::react::hooks::any_dirty() {
+        return;
+    }
+    let all: Vec<Rt> = ALL.with(|a| a.borrow().clone());
+    for rt in &all {
+        rt.borrow_mut().flush_forced();
+    }
+    crate::react::hooks::clear_all_dirty();
 }
 
 /// `selector`(例 `#reaxt-root`)の要素へアプリをマウントする。
@@ -133,14 +154,15 @@ pub fn mount(selector: &str, id: ComponentId, render: impl Fn() -> VNode + 'stat
         let rn = root_node.clone();
         let hit = click_at(&*dom2, &target, |n| n.parent_node(), |n| n.is_same_node(Some(&rn)));
         if hit {
-            rt2.borrow_mut().flush();
+            flush_all();
         }
     });
+    let _ = &rt2;
     root.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
     cb.forget();
 
     root.set_attribute("data-reaxt-hydrated", if adopted { "adopted" } else { "rebuilt" })?;
-    RUNTIME.with(|r| *r.borrow_mut() = Some(rt));
+    register(rt);
     Ok(adopted)
 }
 
@@ -161,16 +183,16 @@ pub fn mount_islands(registry: &[(&str, fn(&str) -> VNode)]) -> Result<usize, Js
             let Some(target) = ev.target().and_then(|t| t.dyn_into::<Node>().ok()) else { return };
             let hit = click_at(&*dom2, &target, |n| n.parent_node(), |n| n.is_same_node(Some(&rn)));
             if hit {
-                rt2.borrow_mut().flush();
+                flush_all();
             }
         });
+        let _ = &rt2;
         root_node.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
         if let Some(el) = root_node.dyn_ref::<Element>() {
             el.set_attribute("data-reaxt-hydrated", if rt.borrow().adopted { "adopted" } else { "rebuilt" })?;
         }
-        // 生かしておく(リスナーが参照するので、ここで落とさない)
-        std::mem::forget(rt);
+        register(rt);
     }
     Ok(n)
 }

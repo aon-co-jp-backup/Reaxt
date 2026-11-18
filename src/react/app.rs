@@ -66,6 +66,15 @@ impl<F: Fn() -> VNode> App<F> {
         Some(patch)
     }
 
+    /// dirtyかどうかに関わらず再レンダーして差分を返す(複数アプリ/アイランドが
+    /// 共有するdirtyフラグを1つのアプリが消費しても、他が取りこぼさないために使う)。
+    pub fn force_tick(&mut self) -> Patch {
+        let new_tree = run_component(self.root_id, || (self.render_fn)());
+        let patch = diff(&self.tree, &new_tree);
+        self.tree = new_tree;
+        patch
+    }
+
     /// `tick`に加えて、dirtyだった場合は`Patch`を実DOM(`rhtml5::Node`)
     /// へ即座に適用する。適用が実際に行われたかを返す。
     #[cfg(feature = "dom_bridge")]

@@ -92,6 +92,30 @@ fn apply_children<D: Dom>(d: &D, parent: &D::Node, patches: &[ChildPatch]) {
     d.set_children(parent, out);
 }
 
+/// 空のテキストを除き、隣り合うテキストを1つにまとめる(再帰)。HTMLに直列化すると空のテキストは
+/// 消え、隣り合うテキストは1つに融合するので、DOMとVNode木を1対1に保つための正規化。
+/// クライアントの描画関数の結果に必ず通す(SSR側は文字列化の時点で同じ結果になる)。
+pub fn normalize(v: VNode) -> VNode {
+    match v {
+        VNode::Text(_) => v,
+        VNode::Element(mut el) => {
+            let mut out: Vec<VNode> = Vec::with_capacity(el.children.len());
+            for c in el.children {
+                match normalize(c) {
+                    VNode::Text(t) if t.is_empty() => {}
+                    VNode::Text(t) => match out.last_mut() {
+                        Some(VNode::Text(prev)) => prev.push_str(&t),
+                        _ => out.push(VNode::Text(t)),
+                    },
+                    other => out.push(other),
+                }
+            }
+            el.children = out;
+            VNode::Element(el)
+        }
+    }
+}
+
 /// SSRで出たDOMがVNode木と構造一致するか(タグ・テキスト・属性。`on*`は出していないので無関係)。
 pub fn matches_dom<D: Dom>(d: &D, n: &D::Node, v: &VNode) -> bool {
     match v {
@@ -131,6 +155,25 @@ pub fn on_click(id: &str, f: impl Fn() + 'static) -> (&'static str, String) {
     let key = if scope == 0 { id.to_string() } else { format!("{scope}:{id}") };
     CLICKS.with(|c| c.borrow_mut().insert(key.clone(), Rc::new(f)));
     (CLICK_ATTR, key)
+}
+
+// ---- 再描画の要求(非同期の応答などクリック以外の更新用) ----
+
+thread_local! {
+    static FLUSH_HOOK: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+/// ホスト(ブラウザ層)が「全アプリを再描画する関数」を登録する。
+pub fn set_flush_hook(f: impl Fn() + 'static) {
+    FLUSH_HOOK.with(|h| *h.borrow_mut() = Some(Rc::new(f)));
+}
+
+/// 状態を非同期に更新した後に呼ぶ(Server Actionsの応答コールバックなど)。フックが無ければ何もしない。
+pub fn request_flush() {
+    let f = FLUSH_HOOK.with(|h| h.borrow().clone());
+    if let Some(f) = f {
+        f();
+    }
 }
 
 // ---- Islands(静的HTMLの一部だけを対話化) ----
@@ -240,7 +283,7 @@ impl<D: Dom> Runtime<D> {
 
     /// アイランド用: 再レンダーのたびに`scope`を有効にする(`on_click`のid名前空間)。
     pub fn mount_scoped(dom: Rc<D>, root: D::Node, id: ComponentId, scope: u32, render: impl Fn() -> VNode + 'static) -> Self {
-        let wrapped = move || with_scope(scope, &render);
+        let wrapped = move || normalize(with_scope(scope, &render));
         let app = App::mount(id, Box::new(wrapped) as Box<dyn Fn() -> VNode>);
         let kids = dom.children(&root);
         let adopted = kids.len() == 1 && matches_dom(&*dom, &kids[0], app.tree());
@@ -264,6 +307,20 @@ impl<D: Dom> Runtime<D> {
             }
             None => false,
         }
+    }
+
+    /// dirty判定を使わず再レンダー→差分→適用する(`flush_all`用)。変更があれば`true`。
+    pub fn flush_forced(&mut self) -> bool {
+        let patch = self.app.force_tick();
+        if patch == Patch::NoOp {
+            return false;
+        }
+        let kids = self.dom.children(&self.root);
+        if let Some(top) = kids.first() {
+            let n = apply(&*self.dom, top, &patch);
+            self.dom.set_children(&self.root, vec![n]);
+        }
+        true
     }
 
     /// マウント先のルートノード。
@@ -449,6 +506,28 @@ mod tests {
         for s in 1..=2 {
             crate::react::hooks::drop_instance(island_component_id(s));
         }
+    }
+
+    #[test]
+    fn empty_and_adjacent_text_do_not_break_hydration() {
+        // 空のテキスト・隣り合うテキストはHTMLで消える/融合する。それでもSSR DOMを採用できる
+        let view = || {
+            VNode::element("p")
+                .child(VNode::text("a"))
+                .child(VNode::text("b"))
+                .child(VNode::element("em").child(VNode::text("")).build())
+                .build()
+        };
+        let d = Rc::new(MemDom);
+        // ブラウザがHTMLから作るDOM相当: <p>ab<em></em></p>
+        let ssr_dom = d.create(&VNode::element("p").child(VNode::text("ab")).child(VNode::element("em").build()).build());
+        assert_eq!(ssr::render(&view()), "<p>ab<em></em></p>");
+        let root = el("div");
+        root.borrow_mut().kids = vec![ssr_dom.clone()];
+        let rt = Runtime::mount(d, root.clone(), 9101, view);
+        assert!(rt.adopted);
+        assert!(Rc::ptr_eq(&root.borrow().kids[0], &ssr_dom));
+        crate::react::hooks::drop_instance(9101);
     }
 
     #[test]

@@ -6,6 +6,7 @@ fn main() {}
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use reaxt::app::{App, RouteRule};
+    use reaxt_actions::ModuleActions;
     use reaxt::react::hooks::{drop_instance, run_component};
     use reaxt::RenderMode;
     use std::sync::Arc;
@@ -15,7 +16,17 @@ fn main() {
     let port = a.next().unwrap_or_else(|| "8765".into());
     let read = |f: &str| std::fs::read(format!("{pkg}/{f}")).unwrap_or_else(|e| panic!("{pkg}/{f}: {e}"));
 
+    // サーバーが持つ状態(Server Actionが更新し、SSRが初期値として描く)
+    let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let (c_page, c_act) = (counter.clone(), counter.clone());
     let app = App::new("Reaxt counter")
+        .global_guard(reaxt_actions::csrf_guard)
+        .module(reaxt::backend::Module::new().action(&reaxt_counter::INC, move |_, _: ()| {
+            Ok(c_act.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1)
+        }))
+        .page("actions.rs", RenderMode::Islands, move |_| {
+            reaxt_counter::actions_page(c_page.load(std::sync::atomic::Ordering::SeqCst))
+        })
         .page("index.rs", RenderMode::SsrHydrate, |_| {
             // SSRではこの要求の間だけコンポーネント状態を作って捨てる(初期値0を描く)
             let t = run_component(1, reaxt_counter::view);

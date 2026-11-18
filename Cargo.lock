@@ -1750,7 +1750,7 @@ dependencies = [
  "hyper",
  "open-runo-connect-core",
  "prost-reflect",
- "rust-json",
+ "rust-json 0.1.0 (git+https://github.com/aon-co-jp/RS-JSON)",
  "serde_json",
  "tokio",
 ]
@@ -1922,7 +1922,7 @@ dependencies = [
  "poem",
  "prost-reflect",
  "reqwest",
- "rust-json",
+ "rust-json 0.1.0 (git+https://github.com/aon-co-jp/RS-JSON)",
  "schemars",
  "serde",
  "serde_json",
@@ -2589,10 +2589,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "reaxt-actions"
+version = "0.0.1"
+dependencies = [
+ "js-sys",
+ "reaxt",
+ "rust-json 0.1.0",
+ "serde",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "reaxt-counter"
 version = "0.0.1"
 dependencies = [
  "reaxt",
+ "reaxt-actions",
  "wasm-bindgen",
 ]
 
@@ -2796,6 +2810,15 @@ dependencies = [
  "rand 0.10.4",
  "rcgen",
  "zfs_accel_hlsl",
+]
+
+[[package]]
+name = "rust-json"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

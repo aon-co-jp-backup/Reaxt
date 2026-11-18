@@ -5,3 +5,10 @@ version = 3
 [[package]]
 name = "reaxt"
 version = "0.0.1"
+dependencies = [
+ "rs-react",
+]
+
+[[package]]
+name = "rs-react"
+version = "0.1.0"

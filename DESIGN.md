@@ -23,7 +23,8 @@ JSON は RS-JSON(`from_str_secure`)。
 
 ## 段階
 0. (済)ルート表・ファイル規約・描画方式の型
-1. SSR: RS-React `render_to_html` + RPoem ハンドラ接続
+1a. (済)SSR描画(エスケープ・on*属性遮断)+Appルーター+開発用HTTPサーバー(実HTTP往復テスト)
+1b. RPoem ハンドラ接続(未)
 2. WASM ハイドレーション+Islands(`island`印)
 3. Server Actions = Connect 自動生成
 4. `reaxt new` / `reaxt dev` / `reaxt build` CLI、SET への配備

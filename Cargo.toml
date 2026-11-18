@@ -11,3 +11,4 @@ repository = "https://github.com/aon-co-jp/Reaxt"
 unsafe_code = "deny"
 
 [dependencies]
+rs-react = { path = "../RS-React" }

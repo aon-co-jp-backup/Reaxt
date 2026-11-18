@@ -44,6 +44,11 @@ pub fn route(app: Arc<App>) -> Route {
     for p in app.method_paths() {
         r = r.at(&p, post(host_handler(app.clone())));
     }
+    // 外部連携の入口(POST。Cosmo向けサブグラフなど)と、機械可読の一覧(GET)
+    for p in app.gateway_paths() {
+        r = r.at(&p, post(host_handler(app.clone())));
+    }
+    r = r.at("/_reaxt/manifest.json", get(host_handler(app.clone())));
     r
 }
 
@@ -132,6 +137,32 @@ mod tests {
         assert!(denied.text().contains("unauthenticated"));
         let page = srv.request(Method::GET, "/", &[], None).await;
         assert_eq!(page.header("cache-control"), Some("public, max-age=30"));
+    }
+
+    #[tokio::test]
+    async fn gateway_and_manifest_over_rpoem() {
+        use reaxt::app::Response;
+        let app = Arc::new(
+            App::new("gw")
+                .page("index.rs", RenderMode::Ssr, |_| VNode::element("p").build())
+                .gateway(
+                    "/_reaxt/graphql",
+                    Arc::new(|_req, _call| Response {
+                        status: 200,
+                        content_type: "application/json; charset=utf-8",
+                        headers: vec![],
+                        bytes: None,
+                        body: "{\"ok\":true}".to_string(),
+                    }),
+                )
+                .finish(),
+        );
+        let srv = TestServer::start(route(app)).await;
+        let g = srv.request(Method::POST, "/_reaxt/graphql", &[], Some(b"{}".to_vec())).await;
+        assert_eq!((g.status, g.text().as_str()), (200, "{\"ok\":true}"));
+        let m = srv.request(Method::GET, "/_reaxt/manifest.json", &[], None).await;
+        assert_eq!(m.status, 200);
+        assert_eq!(m.text(), "{\"version\":1,\"actions\":[]}");
     }
 
     #[tokio::test]

@@ -146,6 +146,11 @@ impl App {
         self.backend.paths()
     }
 
+    /// 外部連携の入口(`POST`)のパス一覧(ホスト側のルート登録用)。
+    pub fn gateway_paths(&self) -> Vec<String> {
+        self.gateways.iter().map(|(p, _)| p.clone()).collect()
+    }
+
     fn rule_for(&self, path: &str) -> Option<&RouteRule> {
         self.rules.iter().find_map(|(p, r)| {
             let ok = path == p

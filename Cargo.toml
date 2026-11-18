@@ -1,0 +1,13 @@
+[package]
+name = "reaxt"
+description = "Reaxt: Rust-only full-stack framework (React/Next/Nuxt/Nest ideas) for RPoem + SET. Hybrid SSR/CSR/Islands per route."
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/aon-co-jp/Reaxt"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]

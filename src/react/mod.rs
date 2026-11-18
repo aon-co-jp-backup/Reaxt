@@ -9,7 +9,10 @@ pub mod dom_bridge;
 
 pub use app::App;
 pub use diff::{AttrsPatch, ChildPatch, Patch};
-pub use hooks::{run_component, take_dirty, use_state, ComponentId, StateSetter};
+pub use hooks::{
+    provide_context, run_component, take_dirty, use_context, use_effect, use_memo, use_reducer, use_ref, use_state, Cleanup,
+    ComponentId, Dispatch, Ref, StateSetter,
+};
 pub use vnode::{VElement, VNode};
 
 #[cfg(feature = "dom_bridge")]

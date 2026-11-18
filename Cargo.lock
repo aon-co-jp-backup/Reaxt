@@ -2602,6 +2602,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "reaxt-cli"
+version = "0.0.1"
+
+[[package]]
 name = "reaxt-counter"
 version = "0.0.1"
 dependencies = [

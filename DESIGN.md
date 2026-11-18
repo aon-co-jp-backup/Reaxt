@@ -45,4 +45,5 @@ JSON は RS-JSON(`from_str_secure`)。
 - Islands(済): `hydrate::island(name, props, render)` で静的ページ中の部品に印(`data-rx-island`/`-props`/`-scope`)を付け、ブラウザは印の部分だけをマウント(`mount_islands`)。クリックidはアイランド番号で名前空間化(同じ部品を複数置いても独立)。ネイティブテスト+実ブラウザ確認(2つのアイランドが独立、静的部分は不変、wasm 152KB)。既知の制約: 更新フラグが全体で1つなので、押したアイランドのリスナーだけがflushする前提(タイマー等の非クリック更新は未対応)。
 - Server Actions(済): `reaxt-actions` クレート。`Action<I, O>`(`const`で定義し、サーバーとブラウザで共有)、サーバー側は`Module::action(&A, |ctx, input| ..)`(入力JSONはRS-JSONの`from_str_secure`で上限つき、出力は`to_string_strict`)、ブラウザ側は`call(&WebClient, &A, &input, |result| ..)`(fetch、応答のあと全アイランドを再描画)。通信はConnectのみ。CSRF対策として`csrf_guard`+`x-reaxt: 1`(カスタムヘッダ必須)。テスト3件+実ブラウザ確認(POST 200・サーバー側の状態が保たれリロード後のSSRにも反映)。`LocalClient`でテスト/SSR時の呼び出しも可能。
 - 修正: 空のテキスト・隣り合うテキストはHTMLで消える/融合するためハイドレーションが不一致になっていた→`hydrate::normalize`で正規化(テスト追加)。更新フラグが全体で1つの制約は`flush_all`(全アイランドを再レンダー)で解消。
-- 未実装: Server Actionsの自動生成、`*slug`のRPoem側ワイルドカード。
+- CLI(済): `reaxt-cli`(コマンド名`reaxt`)。`reaxt new <名前> [--path|--git]`(雛形生成、空でないディレクトリには書かない、名前検査、インストール済みwasm-bindgenの版を雛形に自動で合わせる)、`reaxt build`(wasm32ビルド→版照合→`wasm-bindgen`→`pkg/`、版が違えば直し方を表示)、`reaxt dev`(ビルド→サーバー起動→`src/`の変更を監視して再ビルド・再起動、ビルド失敗中も落ちずに次の保存で再試行)、`reaxt doctor`。雛形からの`build`・`dev`・ブラウザでのハイドレーション/クリックまで実際に確認済み。
+- 未実装: SETへの配備、`reaxt build`の最適化(wasm-opt等)、`*slug`のRPoem側ワイルドカード。

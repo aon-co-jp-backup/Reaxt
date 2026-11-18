@@ -19,7 +19,7 @@ rcss3 = { git = "https://github.com/aon-co-jp/RS-CSS", optional = true }
 dom_bridge = ["dep:rhtml5", "dep:rcss3"]
 
 [workspace]
-members = ["reaxt-rpoem", "reaxt-actions", "examples/counter"]
+members = ["reaxt-rpoem", "reaxt-actions", "reaxt-cli", "examples/counter"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.126"

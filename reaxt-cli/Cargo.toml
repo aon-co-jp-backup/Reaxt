@@ -1,0 +1,13 @@
+[package]
+name = "reaxt-cli"
+description = "reaxt コマンド: new / build / dev / doctor"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/aon-co-jp/Reaxt"
+
+[[bin]]
+name = "reaxt"
+path = "src/main.rs"
+
+[dependencies]

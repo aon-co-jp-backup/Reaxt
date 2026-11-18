@@ -4,6 +4,9 @@
 pub mod react;
 pub mod app;
 pub mod backend;
+pub mod hydrate;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 pub mod server;
 pub mod ssr;
 

@@ -36,7 +36,7 @@ fn handle(app: &App, mut conn: TcpStream) -> std::io::Result<()> {
         .and_then(|(_, v)| v.parse().ok())
         .unwrap_or(0);
     let r = if len > crate::backend::MAX_BODY {
-        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], body: "too large".into() }
+        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], bytes: None, body: "too large".into() }
     } else {
         let mut buf = vec![0u8; len];
         rd.read_exact(&mut buf)?;
@@ -57,14 +57,21 @@ fn handle(app: &App, mut conn: TcpStream) -> std::io::Result<()> {
         "HTTP/1.1 {} {reason}\r\ncontent-type: {}\r\ncontent-length: {}\r\nx-content-type-options: nosniff\r\nconnection: close\r\n",
         r.status,
         r.content_type,
-        r.body.len()
+        r.bytes.as_ref().map_or(r.body.len(), |b| b.len())
     );
     for (k, v) in &r.headers {
         if !k.contains(['\r', '\n']) && !v.contains(['\r', '\n']) {
             head.push_str(&format!("{k}: {v}\r\n"));
         }
     }
-    write!(conn, "{head}\r\n{}", if method == "HEAD" { "" } else { &r.body })
+    conn.write_all(format!("{head}\r\n").as_bytes())?;
+    if method != "HEAD" {
+        match &r.bytes {
+            Some(b) => conn.write_all(b)?,
+            None => conn.write_all(r.body.as_bytes())?,
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

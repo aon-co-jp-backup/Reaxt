@@ -1,0 +1,145 @@
+//! ブラウザ(wasm32)用の `Dom` 実装(web-sys)と `mount`。ロジックは `hydrate` に集約済み。
+use crate::hydrate::{click_at, Dom, Runtime};
+use crate::react::{ComponentId, VNode};
+use std::cell::RefCell;
+use std::rc::Rc;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::{Document, Element, Node};
+
+pub struct WebDom {
+    doc: Document,
+}
+
+impl WebDom {
+    pub fn new() -> Self {
+        WebDom { doc: web_sys::window().expect("window").document().expect("document") }
+    }
+}
+
+impl Default for WebDom {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn safe(name: &str) -> bool {
+    !name.is_empty()
+        && !name.to_ascii_lowercase().starts_with("on")
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
+}
+
+impl Dom for WebDom {
+    type Node = Node;
+
+    fn create(&self, v: &VNode) -> Node {
+        match v {
+            VNode::Text(t) => self.doc.create_text_node(t).into(),
+            VNode::Element(e) => {
+                let el = match self.doc.create_element(&e.tag) {
+                    Ok(el) => el,
+                    // 不正なタグ名は空のspanにして描画を続ける(SSR側は出力しない)
+                    Err(_) => self.doc.create_element("span").expect("span"),
+                };
+                for (k, val) in &e.attrs {
+                    if safe(k) {
+                        let _ = el.set_attribute(k, val);
+                    }
+                }
+                for c in &e.children {
+                    let _ = el.append_child(&self.create(c));
+                }
+                el.into()
+            }
+        }
+    }
+
+    fn children(&self, n: &Node) -> Vec<Node> {
+        let list = n.child_nodes();
+        (0..list.length()).filter_map(|i| list.item(i)).collect()
+    }
+
+    fn set_children(&self, n: &Node, kids: Vec<Node>) {
+        let cur = self.children(n);
+        // 並びも中身も同じなら触らない(フォーカスやスクロールを保つ)
+        if cur.len() == kids.len() && cur.iter().zip(&kids).all(|(a, b)| a.is_same_node(Some(b))) {
+            return;
+        }
+        for c in &cur {
+            let _ = n.remove_child(c);
+        }
+        for k in &kids {
+            let _ = n.append_child(k);
+        }
+    }
+
+    fn set_text(&self, n: &Node, t: &str) {
+        n.set_text_content(Some(t));
+    }
+
+    fn set_attr(&self, n: &Node, k: &str, v: &str) {
+        if let (true, Some(el)) = (safe(k), n.dyn_ref::<Element>()) {
+            let _ = el.set_attribute(k, v);
+        }
+    }
+
+    fn remove_attr(&self, n: &Node, k: &str) {
+        if let Some(el) = n.dyn_ref::<Element>() {
+            let _ = el.remove_attribute(k);
+        }
+    }
+
+    fn replace(&self, old: &Node, new: &Node) {
+        if let Some(p) = old.parent_node() {
+            let _ = p.replace_child(new, old);
+        }
+    }
+
+    fn tag(&self, n: &Node) -> Option<String> {
+        n.dyn_ref::<Element>().map(|e| e.tag_name())
+    }
+
+    fn text(&self, n: &Node) -> Option<String> {
+        (n.node_type() == Node::TEXT_NODE).then(|| n.text_content().unwrap_or_default())
+    }
+
+    fn attr(&self, n: &Node, k: &str) -> Option<String> {
+        n.dyn_ref::<Element>().and_then(|e| e.get_attribute(k))
+    }
+}
+
+thread_local! {
+    static RUNTIME: RefCell<Option<Rc<RefCell<Runtime<WebDom>>>>> = const { RefCell::new(None) };
+}
+
+/// `selector`(例 `#reaxt-root`)の要素へアプリをマウントする。
+/// 中身がSSR出力と一致すればそのまま採用(ハイドレーション)、空/不一致なら描画し直す。
+/// 戻り値は採用できたか。
+pub fn mount(selector: &str, id: ComponentId, render: impl Fn() -> VNode + 'static) -> Result<bool, JsValue> {
+    let dom = Rc::new(WebDom::new());
+    let root: Element = dom
+        .doc
+        .query_selector(selector)?
+        .ok_or_else(|| JsValue::from_str("reaxt: root element not found"))?;
+    let rt = Rc::new(RefCell::new(Runtime::mount(dom.clone(), root.clone().into(), id, render)));
+    let adopted = rt.borrow().adopted;
+
+    // イベント委譲: ルートに1つだけクリックリスナーを付ける
+    let rt2 = rt.clone();
+    let dom2 = dom.clone();
+    let root_node: Node = root.clone().into();
+    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+        let Some(target) = ev.target().and_then(|t| t.dyn_into::<Node>().ok()) else { return };
+        let rn = root_node.clone();
+        let hit = click_at(&*dom2, &target, |n| n.parent_node(), |n| n.is_same_node(Some(&rn)));
+        if hit {
+            rt2.borrow_mut().flush();
+        }
+    });
+    root.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    cb.forget();
+
+    root.set_attribute("data-reaxt-hydrated", if adopted { "adopted" } else { "rebuilt" })?;
+    RUNTIME.with(|r| *r.borrow_mut() = Some(rt));
+    Ok(adopted)
+}

@@ -12,6 +12,8 @@ pub struct Response {
     pub content_type: &'static str,
     pub headers: Vec<(String, String)>,
     pub body: String,
+    /// バイナリ応答(wasm等)。Someなら`body`の代わりにこちらを送る。
+    pub bytes: Option<Vec<u8>>,
 }
 
 /// Nuxtの`routeRules`相当: パス接頭辞ごとの上書き。`/`終わりでなければ完全一致または`/`区切りの接頭辞。
@@ -50,10 +52,23 @@ pub struct App {
     pages: Vec<(Route, Page)>,
     rules: Vec<(String, RouteRule)>,
     backend: Backend,
+    /// 静的アセット(`/_reaxt/boot.js`、wasm等): (パス, content-type, 中身)。
+    assets: Vec<(String, &'static str, Vec<u8>)>,
     title: String,
 }
 
 impl App {
+    /// 静的アセットを登録する(GET/HEADで返す。長期キャッシュはroute_ruleで)。
+    pub fn asset(mut self, path: &str, content_type: &'static str, bytes: Vec<u8>) -> Self {
+        self.assets.push((path.to_string(), content_type, bytes));
+        self
+    }
+
+    /// アセットのパス一覧(ホスト側のルート登録用)。
+    pub fn asset_paths(&self) -> Vec<String> {
+        self.assets.iter().map(|(p, _, _)| p.clone()).collect()
+    }
+
     pub fn new(title: impl Into<String>) -> Self {
         App { title: title.into(), ..Default::default() }
     }
@@ -133,6 +148,7 @@ impl App {
                 status,
                 content_type: "application/json; charset=utf-8",
                 headers: vec![("cache-control".into(), "no-store".into())],
+                bytes: None,
                 body: json,
             };
         }
@@ -149,17 +165,20 @@ impl App {
             }
         }
         if req.method != "GET" && req.method != "HEAD" {
-            return Response { status: 405, content_type: "text/plain; charset=utf-8", headers, body: "method not allowed".into() };
+            return Response { status: 405, content_type: "text/plain; charset=utf-8", headers, bytes: None, body: "method not allowed".into() };
+        }
+        if let Some((_, ct, bytes)) = self.assets.iter().find(|(p, _, _)| p == path) {
+            return Response { status: 200, content_type: ct, headers, bytes: Some(bytes.clone()), body: String::new() };
         }
         for (route, page) in &self.pages {
             if let Some(params) = matches(route, path) {
                 let mode = rule.and_then(|r| r.mode).unwrap_or(route.mode);
                 let tree = page(&params);
-                return Response { status: 200, content_type: "text/html; charset=utf-8", headers, body: self.document(mode, &tree) };
+                return Response { status: 200, content_type: "text/html; charset=utf-8", headers, bytes: None, body: self.document(mode, &tree) };
             }
         }
         let nf = VNode::element("h1").child(VNode::text("404 Not Found")).build();
-        Response { status: 404, content_type: "text/html; charset=utf-8", headers, body: self.document(RenderMode::Ssr, &nf) }
+        Response { status: 404, content_type: "text/html; charset=utf-8", headers, bytes: None, body: self.document(RenderMode::Ssr, &nf) }
     }
 
     fn document(&self, mode: RenderMode, tree: &VNode) -> String {

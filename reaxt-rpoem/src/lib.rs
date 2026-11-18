@@ -36,6 +36,10 @@ pub fn route(app: Arc<App>) -> Route {
             r = r.at(&rp, get(host_handler(app.clone())));
         }
     }
+    // 静的アセット(GET)
+    for p in app.asset_paths() {
+        r = r.at(&p, get(host_handler(app.clone())));
+    }
     // Connectメソッド(POST)。同じパスにページがあっても別メソッドとして登録される。
     for p in app.method_paths() {
         r = r.at(&p, post(host_handler(app.clone())));
@@ -73,7 +77,11 @@ fn host_handler(app: Arc<App>) -> open_runo_poem_compat::Handler {
             for (k, v) in &res.headers {
                 b = b.header(k.as_str(), v.as_str());
             }
-            b.body(hyper_compat::fixed_body(res.body.into())).unwrap_or_else(|_| {
+            let payload: bytes_like::Bytes = match res.bytes {
+                Some(v) => v.into(),
+                None => res.body.into(),
+            };
+            b.body(hyper_compat::fixed_body(payload)).unwrap_or_else(|_| {
                 open_runo_poem_compat::empty_status(open_runo_poem_compat::StatusCode::INTERNAL_SERVER_ERROR)
             })
         }

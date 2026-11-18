@@ -25,7 +25,7 @@ pub struct Route {
 /// 例: `users/[id].rs`→`/users/:id`、`index.rs`→`/`、`blog/[...slug].rs`→`/blog/*slug`。
 /// 先頭`_`のファイル(部品)はルートにしない。`.rs`以外は None。
 pub fn route_from_path(path: &str, mode: RenderMode) -> Option<Route> {
-    let p = path.replace('\', "/");
+    let p = path.replace('\\', "/");
     let stem = p.strip_suffix(".rs")?;
     let mut segs: Vec<&str> = stem.split('/').filter(|s| !s.is_empty()).collect();
     if segs.last().map_or(false, |s| s.starts_with('_')) {
@@ -98,7 +98,7 @@ mod tests {
     fn file_conventions() {
         assert_eq!(route_from_path("index.rs", Ssr).unwrap().pattern, "/");
         assert_eq!(route_from_path("users/[id].rs", Csr).unwrap().pattern, "/users/:id");
-        assert_eq!(route_from_path("blog\[...slug].rs", Islands).unwrap().pattern, "/blog/*slug");
+        assert_eq!(route_from_path("blog\\[...slug].rs", Islands).unwrap().pattern, "/blog/*slug");
         assert!(route_from_path("_layout.rs", Ssr).is_none());
         assert!(route_from_path("a.txt", Ssr).is_none());
     }

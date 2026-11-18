@@ -17,3 +17,6 @@ rcss3 = { git = "https://github.com/aon-co-jp/RS-CSS", optional = true }
 [features]
 # RS-HTML/RS-CSSのDOM木とVNodeを接続(RS-Reactから引き継いだ任意機能)
 dom_bridge = ["dep:rhtml5", "dep:rcss3"]
+
+[workspace]
+members = ["reaxt-rpoem"]

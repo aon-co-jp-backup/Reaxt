@@ -1,0 +1,16 @@
+[package]
+name = "reaxt-rpoem"
+description = "Reaxt を RPoem(open-runo-poem-compat)上で配信するアダプタ"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/aon-co-jp/Reaxt"
+
+[dependencies]
+reaxt = { path = ".." }
+# RPoem自体が兄弟ディレクトリの open-web-server にパス依存するため、F:RPoem と F:open-web-server を兄弟に置く
+open-runo-poem-compat = { path = "../../RPoem/crates/open-runo-poem-compat" }
+hyper = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

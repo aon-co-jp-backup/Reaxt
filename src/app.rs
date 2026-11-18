@@ -44,6 +44,11 @@ impl App {
         self
     }
 
+    /// 登録済みルートのパターン(`/users/:id`、`/docs/*p`)。ホスト側(RPoem等)のルート登録用。
+    pub fn patterns(&self) -> Vec<String> {
+        self.pages.iter().map(|(r, _)| r.pattern.clone()).collect()
+    }
+
     pub fn handle(&self, path: &str) -> Response {
         let path = path.split(['?', '#']).next().unwrap_or("/");
         for (route, page) in &self.pages {

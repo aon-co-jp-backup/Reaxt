@@ -9,6 +9,7 @@ pub mod hydrate;
 pub mod wasm;
 pub mod server;
 pub mod ssr;
+pub mod stream;
 
 /// ルートごとの描画方式(Nextのroute segment config / NuxtのrouteRulesに相当)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

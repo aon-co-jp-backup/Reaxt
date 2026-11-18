@@ -34,34 +34,54 @@ Rust だけで書くフロント+バックエンド統合の枠組み。RPoem(�
 
 # 開発ルールと到達点 / Rules and Status (10 languages)
 
-> AI翻訳(日英以外はネイティブ検証前)。/ AI translations (other than ja/en not yet native-checked).
+> 日本語・英語以外は AI 翻訳をネイティブらしい表現に整えたもので、母語話者による確認はまだです。 / Apart from Japanese and English, these are AI translations polished toward natural phrasing, not yet reviewed by native speakers.
 
 ## 日本語
-**ルール**: JS/TSを書かない(Rust→wasm)、RESTを作らない(Connectのみ)、JSONはRS-JSON(wasmにserdeを入れない)、トークンはサーバー側の中継で付ける、実ブラウザ・実サーバーで確認してから完了と報告する。**到達点**: 10画面移植・JS/TS/jQuery/Cosmo/DB連携まで。**未了**: 実Cosmo Router・実PostgreSQL/CockroachDB・TLS・MySQL/Oracle/Snowflakeドライバ・SET配備。
+**ルール**: JS/TS は書かない(Rust から wasm へ)。REST は作らない(Connect のみ)。JSON は RS-JSON で扱い、wasm に serde を入れない。トークンはサーバー側の中継で付ける。実ブラウザと実サーバーで確認してから完了と報告する。
+**到達点**: 10画面の移植と、JS/TS・jQuery・Cosmo・DB(接続プール込み)の連携まで。
+**未了**: 実 Cosmo Router、実 PostgreSQL/CockroachDB、TLS、MySQL/Oracle/Snowflake ドライバ、SET への配備。
 
 ## English
-**Rules**: write no JS/TS (Rust to wasm), build no REST (Connect only), JSON through RS-JSON (no serde in wasm), attach tokens in the server-side relay, and report done only after checking in a real browser and against a real server. **Status**: 10 screens ported; JS/TS, jQuery, Cosmo and DB integration in place. **Open**: real Cosmo Router, real PostgreSQL/CockroachDB, TLS, MySQL/Oracle/Snowflake drivers, SET deployment.
+**Rules**: write no JS/TS (Rust compiles to wasm); build no REST (Connect only); handle JSON with RS-JSON and keep serde out of wasm; attach tokens in the server-side relay; and report work as done only after checking it in a real browser against a real server.
+**Status**: 10 screens ported, with JS/TS, jQuery, Cosmo and database integration (including a connection pool) in place.
+**Open**: a real Cosmo Router, real PostgreSQL/CockroachDB, TLS, MySQL/Oracle/Snowflake drivers and deployment on SET.
 
 ## 简体中文
-**规则**:不写 JS/TS(Rust 编译为 wasm),不做 REST(仅 Connect),JSON 使用 RS-JSON(wasm 中不引入 serde),令牌由服务端中继附加,在真实浏览器和真实服务器上验证后才报告完成。**进展**:已移植 10 个页面,已具备 JS/TS、jQuery、Cosmo、数据库集成。**未完成**:真实 Cosmo Router、真实 PostgreSQL/CockroachDB、TLS、MySQL/Oracle/Snowflake 驱动、SET 部署。
+**规则**:不写 JS/TS(由 Rust 编译为 wasm);不做 REST(只用 Connect);JSON 统一使用 RS-JSON,wasm 中不引入 serde;令牌由服务端中继附加;必须在真实浏览器和真实服务器上验证通过,才能报告完成。
+**进展**:已迁移 10 个页面,并完成 JS/TS、jQuery、Cosmo 和数据库(含连接池)的集成。
+**待完成**:真实的 Cosmo Router、真实的 PostgreSQL/CockroachDB、TLS、MySQL/Oracle/Snowflake 驱动、部署到 SET。
 
 ## 繁體中文
-**規則**:不寫 JS/TS(Rust 編譯為 wasm),不做 REST(僅 Connect),JSON 使用 RS-JSON(wasm 中不引入 serde),權杖由伺服器端中繼附加,在真實瀏覽器與真實伺服器上驗證後才回報完成。**進度**:已移植 10 個頁面,已具備 JS/TS、jQuery、Cosmo、資料庫整合。**未完成**:真實 Cosmo Router、真實 PostgreSQL/CockroachDB、TLS、MySQL/Oracle/Snowflake 驅動、SET 部署。
+**規則**:不撰寫 JS/TS(由 Rust 編譯為 wasm);不做 REST(僅使用 Connect);JSON 一律交由 RS-JSON 處理,wasm 中不引入 serde;權杖由伺服器端中繼附加;必須在真實瀏覽器與真實伺服器上驗證無誤,才能回報完成。
+**進度**:已移植 10 個頁面,並完成 JS/TS、jQuery、Cosmo 與資料庫(含連線池)的整合。
+**待完成**:真實的 Cosmo Router、真實的 PostgreSQL/CockroachDB、TLS、MySQL/Oracle/Snowflake 驅動程式、部署到 SET。
 
 ## 한국어
-**규칙**: JS/TS를 작성하지 않는다(Rust→wasm), REST를 만들지 않는다(Connect만), JSON은 RS-JSON으로 처리(wasm에 serde 금지), 토큰은 서버 측 중계에서 붙인다, 실제 브라우저와 실제 서버에서 확인한 뒤에만 완료를 보고한다. **현황**: 10개 화면 이식, JS/TS·jQuery·Cosmo·DB 연동 완료. **미완료**: 실제 Cosmo Router, 실제 PostgreSQL/CockroachDB, TLS, MySQL/Oracle/Snowflake 드라이버, SET 배포.
+**규칙**: JS/TS는 작성하지 않습니다(Rust를 wasm으로 컴파일). REST는 만들지 않습니다(Connect만 사용). JSON은 RS-JSON으로 처리하며 wasm에는 serde를 넣지 않습니다. 토큰은 서버 측 중계에서 붙입니다. 실제 브라우저와 실제 서버에서 확인한 뒤에만 완료로 보고합니다.
+**현황**: 10개 화면 이식을 마쳤고, JS/TS·jQuery·Cosmo·데이터베이스(커넥션 풀 포함) 연동까지 갖추었습니다.
+**남은 작업**: 실제 Cosmo Router, 실제 PostgreSQL/CockroachDB, TLS, MySQL/Oracle/Snowflake 드라이버, SET 배포.
 
 ## Deutsch
-**Regeln**: kein JS/TS schreiben (Rust nach wasm), kein REST bauen (nur Connect), JSON über RS-JSON (kein serde in wasm), Tokens im serverseitigen Relay anfügen, Fertigstellung erst nach Prüfung in einem echten Browser und an einem echten Server melden. **Stand**: 10 Bildschirme portiert; JS/TS-, jQuery-, Cosmo- und DB-Anbindung vorhanden. **Offen**: echter Cosmo Router, echtes PostgreSQL/CockroachDB, TLS, Treiber für MySQL/Oracle/Snowflake, Betrieb auf SET.
+**Regeln**: kein JS/TS schreiben (Rust wird zu wasm kompiliert); kein REST bauen (nur Connect); JSON über RS-JSON verarbeiten und serde aus dem wasm heraushalten; Tokens im serverseitigen Relay anfügen; eine Aufgabe erst als erledigt melden, wenn sie in einem echten Browser gegen einen echten Server geprüft wurde.
+**Stand**: 10 Bildschirme portiert; die Anbindung von JS/TS, jQuery, Cosmo und Datenbanken (einschließlich Verbindungspool) steht.
+**Offen**: ein echter Cosmo Router, echtes PostgreSQL/CockroachDB, TLS, Treiber für MySQL/Oracle/Snowflake und die Bereitstellung auf SET.
 
 ## Français
-**Règles** : n'écrire ni JS ni TS (Rust vers wasm), ne pas créer de REST (Connect uniquement), JSON via RS-JSON (pas de serde dans le wasm), ajouter les jetons dans le relais côté serveur, ne déclarer terminé qu'après vérification dans un vrai navigateur et sur un vrai serveur. **État** : 10 écrans portés ; intégrations JS/TS, jQuery, Cosmo et base de données en place. **Reste** : vrai Cosmo Router, vrais PostgreSQL/CockroachDB, TLS, pilotes MySQL/Oracle/Snowflake, déploiement sur SET.
+**Règles** : ne pas écrire de JS/TS (Rust est compilé en wasm) ; ne pas créer de REST (Connect uniquement) ; traiter le JSON avec RS-JSON et garder serde hors du wasm ; ajouter les jetons dans le relais côté serveur ; ne considérer un travail comme terminé qu'après l'avoir vérifié dans un vrai navigateur face à un vrai serveur.
+**État** : 10 écrans portés ; les intégrations JS/TS, jQuery, Cosmo et bases de données (pool de connexions compris) sont en place.
+**Reste à faire** : un vrai Cosmo Router, de vrais PostgreSQL/CockroachDB, TLS, les pilotes MySQL/Oracle/Snowflake et le déploiement sur SET.
 
 ## Español
-**Reglas**: no escribir JS/TS (Rust a wasm), no crear REST (solo Connect), JSON mediante RS-JSON (sin serde en wasm), añadir los tokens en el relé del servidor, y dar algo por terminado solo tras comprobarlo en un navegador real y contra un servidor real. **Estado**: 10 pantallas portadas; integración con JS/TS, jQuery, Cosmo y bases de datos lista. **Pendiente**: Cosmo Router real, PostgreSQL/CockroachDB reales, TLS, controladores de MySQL/Oracle/Snowflake, despliegue en SET.
+**Reglas**: no escribir JS/TS (Rust se compila a wasm); no crear REST (solo Connect); procesar el JSON con RS-JSON y mantener serde fuera del wasm; añadir los tokens en el relé del servidor; y dar un trabajo por terminado solo después de comprobarlo en un navegador real frente a un servidor real.
+**Estado**: 10 pantallas portadas; la integración con JS/TS, jQuery, Cosmo y bases de datos (incluido un pool de conexiones) está lista.
+**Pendiente**: un Cosmo Router real, PostgreSQL/CockroachDB reales, TLS, los controladores de MySQL/Oracle/Snowflake y el despliegue en SET.
 
 ## Português
-**Regras**: não escrever JS/TS (Rust para wasm), não criar REST (somente Connect), JSON via RS-JSON (sem serde no wasm), anexar os tokens no relé do servidor e só dar como concluído após verificar em um navegador real e em um servidor real. **Estado**: 10 telas portadas; integração com JS/TS, jQuery, Cosmo e bancos de dados pronta. **Pendente**: Cosmo Router real, PostgreSQL/CockroachDB reais, TLS, drivers de MySQL/Oracle/Snowflake, implantação no SET.
+**Regras**: não escrever JS/TS (o Rust é compilado para wasm); não criar REST (apenas Connect); tratar o JSON com o RS-JSON e manter o serde fora do wasm; anexar os tokens no relé do servidor; e só considerar um trabalho concluído depois de verificá-lo em um navegador real contra um servidor real.
+**Estado**: 10 telas portadas; a integração com JS/TS, jQuery, Cosmo e bancos de dados (incluindo um pool de conexões) está pronta.
+**Pendente**: um Cosmo Router real, PostgreSQL/CockroachDB reais, TLS, os drivers de MySQL/Oracle/Snowflake e a implantação no SET.
 
 ## Русский
-**Правила**: не писать JS/TS (Rust в wasm), не создавать REST (только Connect), JSON через RS-JSON (без serde в wasm), токены добавляются в серверном ретрансляторе, о завершении сообщать только после проверки в настоящем браузере и на настоящем сервере. **Состояние**: перенесены 10 экранов; интеграции с JS/TS, jQuery, Cosmo и базами данных готовы. **Осталось**: настоящий Cosmo Router, настоящие PostgreSQL/CockroachDB, TLS, драйверы MySQL/Oracle/Snowflake, развёртывание на SET.
+**Правила**: не писать JS/TS (Rust компилируется в wasm); не создавать REST (только Connect); работать с JSON через RS-JSON и не подключать serde к wasm; токены добавлять в серверном ретрансляторе; считать работу завершённой только после проверки в настоящем браузере на настоящем сервере.
+**Состояние**: перенесены 10 экранов; готова интеграция с JS/TS, jQuery, Cosmo и базами данных (включая пул соединений).
+**Осталось**: настоящий Cosmo Router, настоящие PostgreSQL/CockroachDB, TLS, драйверы MySQL/Oracle/Snowflake и развёртывание на SET.

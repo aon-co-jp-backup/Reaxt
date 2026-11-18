@@ -58,34 +58,44 @@ ARUARU_DB_ADMIN_TOKEN=tk ARUARU_GQL=127.0.0.1:4100 cargo run -p aruaru-admin-rea
 
 # 再開の手順と次の作業 / How to Resume and Next Steps (10 languages)
 
-> AI翻訳(日英以外はネイティブ検証前)。/ AI translations (other than ja/en not yet native-checked).
+> 日本語・英語以外は AI 翻訳をネイティブらしい表現に整えたもので、母語話者による確認はまだです。 / Apart from Japanese and English, these are AI translations polished toward natural phrasing, not yet reviewed by native speakers.
 
 ## 日本語
-**再開**: 兄弟ディレクトリに `RS-JSON`・`RPoem` を置く。`cargo test --workspace` で全件成功を確認。実サーバー試験は環境変数で有効化(`REAXT_LIVE_ARUARU`・`REAXT_LIVE_PG`)。**次の作業(順)**: 実Cosmo Routerでの合成 → 実PostgreSQL/CockroachDB+TLS → MySQL/Oracle/Snowflakeドライバ → 接続プール → SET配備 → `wasm-opt`と速度実測。
+**再開のしかた**: `RS-JSON` と `RPoem` を同じ階層の兄弟ディレクトリに置き、`cargo test --workspace` を実行して全件成功を確認します。実サーバーを使う試験は環境変数で有効にします(`REAXT_LIVE_ARUARU`、`REAXT_LIVE_PG`)。
+**次の作業(この順)**: 実 Cosmo Router での合成 → 実 PostgreSQL/CockroachDB と TLS → MySQL/Oracle/Snowflake ドライバ → SET への配備 → `wasm-opt` と速度の実測。
 
 ## English
-**Resume**: place `RS-JSON` and `RPoem` as sibling directories and run `cargo test --workspace` (all tests should pass). Live-server tests are switched on by environment variables (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`). **Next, in order**: compose with a real Cosmo Router, real PostgreSQL/CockroachDB with TLS, MySQL/Oracle/Snowflake drivers, a connection pool, SET deployment, `wasm-opt` and speed measurements.
+**How to resume**: put `RS-JSON` and `RPoem` next to this repository as sibling directories and run `cargo test --workspace`; every test should pass. Tests that need a live server are switched on with environment variables (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`).
+**Next, in this order**: compose with a real Cosmo Router, connect to real PostgreSQL/CockroachDB over TLS, write the MySQL/Oracle/Snowflake drivers, deploy on SET, then add `wasm-opt` and measure speed.
 
 ## 简体中文
-**恢复**:将 `RS-JSON`、`RPoem` 放在同级目录,运行 `cargo test --workspace` 确认全部通过。真实服务器测试通过环境变量启用(`REAXT_LIVE_ARUARU`、`REAXT_LIVE_PG`)。**后续工作(按顺序)**:与真实 Cosmo Router 联合验证 → 真实 PostgreSQL/CockroachDB + TLS → MySQL/Oracle/Snowflake 驱动 → 连接池 → 部署到 SET → `wasm-opt` 与速度实测。
+**如何继续**:把 `RS-JSON` 和 `RPoem` 放在与本仓库同级的目录下,运行 `cargo test --workspace`,确认全部测试通过。需要真实服务器的测试通过环境变量开启(`REAXT_LIVE_ARUARU`、`REAXT_LIVE_PG`)。
+**接下来依次要做**:与真实的 Cosmo Router 联调 → 通过 TLS 连接真实的 PostgreSQL/CockroachDB → 实现 MySQL/Oracle/Snowflake 驱动 → 部署到 SET → 引入 `wasm-opt` 并实测速度。
 
 ## 繁體中文
-**恢復**:將 `RS-JSON`、`RPoem` 放在同層目錄,執行 `cargo test --workspace` 確認全部通過。真實伺服器測試透過環境變數啟用(`REAXT_LIVE_ARUARU`、`REAXT_LIVE_PG`)。**後續工作(依序)**:與真實 Cosmo Router 聯合驗證 → 真實 PostgreSQL/CockroachDB + TLS → MySQL/Oracle/Snowflake 驅動 → 連線池 → 部署到 SET → `wasm-opt` 與速度實測。
+**如何繼續**:將 `RS-JSON` 與 `RPoem` 放在與本儲存庫同層的目錄下,執行 `cargo test --workspace`,確認所有測試皆通過。需要真實伺服器的測試以環境變數啟用(`REAXT_LIVE_ARUARU`、`REAXT_LIVE_PG`)。
+**接下來依序要做**:與真實的 Cosmo Router 整合測試 → 透過 TLS 連線真實的 PostgreSQL/CockroachDB → 實作 MySQL/Oracle/Snowflake 驅動程式 → 部署到 SET → 導入 `wasm-opt` 並實測速度。
 
 ## 한국어
-**재개**: `RS-JSON`과 `RPoem`을 같은 상위 디렉터리에 두고 `cargo test --workspace`로 전체 통과를 확인한다. 실제 서버 테스트는 환경 변수(`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`)로 켠다. **다음 작업(순서대로)**: 실제 Cosmo Router와 합성 → 실제 PostgreSQL/CockroachDB + TLS → MySQL/Oracle/Snowflake 드라이버 → 커넥션 풀 → SET 배포 → `wasm-opt`와 속도 실측.
+**이어서 작업하는 방법**: `RS-JSON`과 `RPoem`을 이 저장소와 같은 상위 디렉터리에 나란히 두고 `cargo test --workspace`를 실행해 모든 테스트가 통과하는지 확인합니다. 실제 서버가 필요한 테스트는 환경 변수(`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`)로 켭니다.
+**다음 작업(순서대로)**: 실제 Cosmo Router와 통합 → TLS로 실제 PostgreSQL/CockroachDB 연결 → MySQL/Oracle/Snowflake 드라이버 구현 → SET 배포 → `wasm-opt` 적용 및 속도 측정.
 
 ## Deutsch
-**Wiederaufnahme**: `RS-JSON` und `RPoem` als Geschwisterverzeichnisse ablegen und `cargo test --workspace` ausführen (alle Tests sollen bestehen). Tests gegen echte Server werden über Umgebungsvariablen aktiviert (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`). **Nächste Schritte, der Reihe nach**: Komposition mit einem echten Cosmo Router → echtes PostgreSQL/CockroachDB mit TLS → Treiber für MySQL/Oracle/Snowflake → Verbindungspool → Betrieb auf SET → `wasm-opt` und Geschwindigkeitsmessung.
+**So geht es weiter**: `RS-JSON` und `RPoem` als Geschwisterverzeichnisse neben dieses Repository legen und `cargo test --workspace` ausführen; alle Tests müssen bestehen. Tests, die einen laufenden Server brauchen, werden über Umgebungsvariablen aktiviert (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`).
+**Nächste Schritte in dieser Reihenfolge**: Zusammenspiel mit einem echten Cosmo Router, Anbindung an echtes PostgreSQL/CockroachDB über TLS, Treiber für MySQL/Oracle/Snowflake, Bereitstellung auf SET, danach `wasm-opt` und Geschwindigkeitsmessungen.
 
 ## Français
-**Reprise** : placer `RS-JSON` et `RPoem` en répertoires frères et lancer `cargo test --workspace` (tous les tests doivent passer). Les tests sur de vrais serveurs s'activent par variables d'environnement (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`). **Suite, dans l'ordre** : composition avec un vrai Cosmo Router → vrai PostgreSQL/CockroachDB avec TLS → pilotes MySQL/Oracle/Snowflake → pool de connexions → déploiement sur SET → `wasm-opt` et mesures de vitesse.
+**Pour reprendre** : placer `RS-JSON` et `RPoem` à côté de ce dépôt, dans des répertoires frères, puis lancer `cargo test --workspace` ; tous les tests doivent passer. Les tests qui nécessitent un vrai serveur s'activent par des variables d'environnement (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`).
+**Étapes suivantes, dans cet ordre** : intégration avec un vrai Cosmo Router, connexion à de vrais PostgreSQL/CockroachDB via TLS, écriture des pilotes MySQL/Oracle/Snowflake, déploiement sur SET, puis `wasm-opt` et mesures de vitesse.
 
 ## Español
-**Reanudar**: colocar `RS-JSON` y `RPoem` como directorios hermanos y ejecutar `cargo test --workspace` (todas las pruebas deben pasar). Las pruebas con servidores reales se activan con variables de entorno (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`). **Siguiente, en orden**: composición con un Cosmo Router real → PostgreSQL/CockroachDB reales con TLS → controladores de MySQL/Oracle/Snowflake → pool de conexiones → despliegue en SET → `wasm-opt` y mediciones de velocidad.
+**Cómo retomar el trabajo**: coloca `RS-JSON` y `RPoem` junto a este repositorio, como directorios hermanos, y ejecuta `cargo test --workspace`; todas las pruebas deben pasar. Las pruebas que necesitan un servidor real se activan con variables de entorno (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`).
+**Siguientes pasos, por orden**: integración con un Cosmo Router real, conexión a PostgreSQL/CockroachDB reales mediante TLS, controladores de MySQL/Oracle/Snowflake, despliegue en SET y, después, `wasm-opt` y mediciones de velocidad.
 
 ## Português
-**Retomar**: colocar `RS-JSON` e `RPoem` como diretórios irmãos e executar `cargo test --workspace` (todos os testes devem passar). Os testes com servidores reais são ativados por variáveis de ambiente (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`). **Próximos passos, em ordem**: composição com um Cosmo Router real → PostgreSQL/CockroachDB reais com TLS → drivers de MySQL/Oracle/Snowflake → pool de conexões → implantação no SET → `wasm-opt` e medições de velocidade.
+**Como retomar**: coloque `RS-JSON` e `RPoem` ao lado deste repositório, como diretórios irmãos, e execute `cargo test --workspace`; todos os testes devem passar. Os testes que exigem um servidor real são ativados por variáveis de ambiente (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`).
+**Próximos passos, em ordem**: integração com um Cosmo Router real, conexão a PostgreSQL/CockroachDB reais via TLS, drivers de MySQL/Oracle/Snowflake, implantação no SET e, por fim, `wasm-opt` e medições de velocidade.
 
 ## Русский
-**Возобновление**: разместите `RS-JSON` и `RPoem` в соседних каталогах и выполните `cargo test --workspace` (все тесты должны пройти). Тесты с настоящими серверами включаются переменными окружения (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`). **Дальнейшие шаги по порядку**: композиция с настоящим Cosmo Router → настоящие PostgreSQL/CockroachDB с TLS → драйверы MySQL/Oracle/Snowflake → пул соединений → развёртывание на SET → `wasm-opt` и замеры скорости.
+**Как продолжить работу**: поместите `RS-JSON` и `RPoem` рядом с этим репозиторием, в соседние каталоги, и выполните `cargo test --workspace` — все тесты должны пройти. Тесты, которым нужен настоящий сервер, включаются переменными окружения (`REAXT_LIVE_ARUARU`, `REAXT_LIVE_PG`).
+**Дальнейшие шаги по порядку**: интеграция с настоящим Cosmo Router, подключение к реальным PostgreSQL/CockroachDB по TLS, драйверы MySQL/Oracle/Snowflake, развёртывание на SET, затем `wasm-opt` и замеры скорости.

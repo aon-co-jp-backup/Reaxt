@@ -4,6 +4,7 @@ pub mod boundary;
 pub mod diff;
 pub mod hooks;
 pub mod signals;
+pub mod vue;
 pub mod vnode;
 
 #[cfg(feature = "dom_bridge")]

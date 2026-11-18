@@ -44,7 +44,7 @@ fn handle(app: &App, mut conn: TcpStream) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::RenderMode;
-    use rs_react::VNode;
+    use crate::react::VNode;
 
     #[test]
     fn real_http_roundtrip() {

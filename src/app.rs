@@ -1,6 +1,6 @@
 //! ルート表+ページ関数+描画方式。ページは`Fn(&Params)->VNode`(サーバー/WASM共通の純関数)。
 use crate::{matches, sort_routes, ssr, RenderMode, Route};
-use rs_react::VNode;
+use crate::react::VNode;
 
 pub type Params = Vec<(String, String)>;
 type Page = Box<dyn Fn(&Params) -> VNode + Send + Sync>;

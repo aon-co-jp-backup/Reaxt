@@ -2,6 +2,7 @@
 
 目的: JavaScript/TypeScript を使わず、Rust だけでフロント+バックエンドを書く全部入り枠組み。
 RPoem(サーバー、Tomcat相当)と SET(配備・サイト群)の上で使う。部品の土台は
+(RS-Reactは廃止し、2026-11-18に本リポジトリの`src/react/`へ統合済み)
 RS-React(仮想DOM・diff・hooks、既存)・RS-HTML・RS-CSS。
 
 ## 取り込む良い所(出典の考え方のみ。コードは流用しない)

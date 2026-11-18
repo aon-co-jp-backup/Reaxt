@@ -3,12 +3,19 @@
 version = 3
 
 [[package]]
+name = "rcss3"
+version = "0.1.0"
+source = "git+https://github.com/aon-co-jp/RS-CSS#1523b1049b0e34f6bab4e2eadc3042364272cfc4"
+
+[[package]]
 name = "reaxt"
 version = "0.0.1"
 dependencies = [
- "rs-react",
+ "rcss3",
+ "rhtml5",
 ]
 
 [[package]]
-name = "rs-react"
+name = "rhtml5"
 version = "0.1.0"
+source = "git+https://github.com/aon-co-jp/RS-HTML#8e5b113558979d0705723fc43f2f111a0bb4205f"

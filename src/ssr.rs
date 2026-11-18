@@ -1,5 +1,5 @@
 //! VNode→HTML(SSR)。テキスト/属性値は必ずエスケープする。空要素は閉じタグ無し。
-use rs_react::VNode;
+use crate::react::VNode;
 
 const VOID: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",

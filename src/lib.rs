@@ -1,6 +1,7 @@
 //! Reaxt: ルート単位でSSR/CSR/Islandsを選べる、Rustだけのフルスタック枠組みの核。
 //! 設計は DESIGN.md。ここは「ファイル規約→ルート表→描画方式」の純粋ロジック(依存ゼロ)。
 
+pub mod react;
 pub mod app;
 pub mod server;
 pub mod ssr;

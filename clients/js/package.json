@@ -1,0 +1,10 @@
+{
+  "name": "reaxt-client",
+  "version": "0.1.0",
+  "description": "Reaxt (Rust full-stack framework) client for JavaScript/TypeScript: Connect unary calls, no dependencies",
+  "type": "module",
+  "main": "reaxt-client.mjs",
+  "types": "reaxt-client.d.ts",
+  "files": ["reaxt-client.mjs", "reaxt-client.d.ts", "reaxt-jquery.js"],
+  "license": "Apache-2.0 OR MIT"
+}

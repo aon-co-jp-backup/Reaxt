@@ -2624,6 +2624,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "reaxt-db"
+version = "0.0.1"
+dependencies = [
+ "rust-json 0.1.0",
+]
+
+[[package]]
 name = "reaxt-rpoem"
 version = "0.0.1"
 dependencies = [

@@ -41,8 +41,12 @@ fn main() {
         )
         .asset("/_reaxt/pkg/reaxt_counter.js", "text/javascript; charset=utf-8", read("reaxt_counter.js"))
         .asset("/_reaxt/pkg/reaxt_counter_bg.wasm", "application/wasm", read("reaxt_counter_bg.wasm"))
+        .asset("/_reaxt/reaxt-jquery.js", "text/javascript; charset=utf-8", include_bytes!("../../../../clients/js/reaxt-jquery.js").to_vec())
+        .asset("/_reaxt/jquery-demo.html", "text/html; charset=utf-8", include_bytes!("../../../../clients/js/demo-jquery.html").to_vec())
         .route_rule("/_reaxt/", RouteRule::default().cache(0))
         .finish();
+    // Cosmo向けGraphQLサブグラフ(POST /_reaxt/graphql)を足す
+    let app = reaxt_actions::subgraph::install(app);
     let l = std::net::TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind");
     println!("http://127.0.0.1:{port}/");
     reaxt::server::serve(Arc::new(app), l);

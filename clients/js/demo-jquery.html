@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8"><title>Reaxt + jQuery</title>
+<h1>Reaxt + jQuery</h1>
+<button id="inc">サーバーのカウンターを+1</button> <b id="n">-</b> <em id="err"></em>
+<ul id="actions"></ul>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="/_reaxt/reaxt-jquery.js"></script>
+<script>
+  $("#inc").reaxt("click", "demo.v1.Counter", "Inc", null, function (r) { $("#n").text(r); }, function (e) { $("#err").text(e.code); });
+  $.reaxt.manifest().done(function (list) {
+    $.each(list, function (_, a) { $("#actions").append($("<li>").text(a.path)); });
+  });
+</script>

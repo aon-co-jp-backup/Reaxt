@@ -4,6 +4,7 @@
 //! - クライアント: `call(&client, &ACTION, &input, |result| ...)`(コールバック式。非同期の応答で状態を更新する)
 //!
 //! 通信はConnect単純呼び出し(`POST /pkg.Service/Method`、本文JSON)のみで、RESTは作らない。
+pub mod subgraph;
 use reaxt::backend::{Ctx, Denied, Module};
 use rust_json::{parse_light_secure, LightLimits};
 use std::marker::PhantomData;

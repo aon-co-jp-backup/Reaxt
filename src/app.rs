@@ -57,9 +57,20 @@ pub struct App {
     title: String,
     /// `<head>`に足す任意のHTML(CSSの`<link>`など。信頼できる固定文字列だけを渡すこと)。
     head: String,
+    /// 外部連携の入口(`POST path`)。Connectメソッドを呼ぶ関数を受け取る(GraphQLサブグラフ等で使う)。
+    gateways: Vec<(String, Gateway)>,
 }
 
+/// 外部連携の入口: (リクエスト, Connectメソッド呼び出し関数) → 応答。
+pub type Gateway = std::sync::Arc<dyn Fn(&Request, &dyn Fn(&str, &str) -> (u16, String)) -> Response + Send + Sync>;
+
 impl App {
+    /// `POST path` を外部連携の入口にする(例: Cosmo向けGraphQLサブグラフ `/_reaxt/graphql`)。
+    pub fn gateway(mut self, path: &str, g: Gateway) -> Self {
+        self.gateways.push((path.to_string(), g));
+        self
+    }
+
     /// `<head>`に足すHTML(例 `<link rel="stylesheet" href="/_reaxt/app.css">`)。
     pub fn head(mut self, html: &str) -> Self {
         self.head.push_str(html);
@@ -151,6 +162,16 @@ impl App {
 
     /// 全入口: Connectメソッド(POST)→ページ(GET/HEAD)→404。
     pub fn dispatch(&self, req: &Request) -> Response {
+        let bare = req.path.split(['?', '#']).next().unwrap_or("");
+        if req.method == "GET" && bare == "/_reaxt/manifest.json" {
+            return Response { status: 200, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, body: self.manifest() };
+        }
+        if req.method == "POST" {
+            if let Some((_, g)) = self.gateways.iter().find(|(p, _)| p == bare) {
+                let call = |path: &str, body: &str| self.backend.call("POST", path, req.headers, body).unwrap_or((404, "{\"code\":\"not_found\",\"message\":\"unknown method\"}".to_string()));
+                return g(req, &call);
+            }
+        }
         if let Some((status, json)) = self.backend.call(req.method, req.path, req.headers, req.body) {
             return Response {
                 status,
@@ -190,6 +211,20 @@ impl App {
         Response { status: 404, content_type: "text/html; charset=utf-8", headers, bytes: None, body: self.document(RenderMode::Ssr, &nf) }
     }
 
+    /// 公開しているConnectメソッドの一覧(JS/TS・Cosmo連携が読む)。
+    pub fn manifest(&self) -> String {
+        let items: Vec<String> = self
+            .backend
+            .paths()
+            .iter()
+            .filter_map(|p| {
+                let (s, m) = p.strip_prefix('/')?.rsplit_once('/')?;
+                Some(format!("{{\"service\":{},\"method\":{},\"path\":{}}}", jstr(s), jstr(m), jstr(p)))
+            })
+            .collect();
+        format!("{{\"version\":1,\"actions\":[{}]}}", items.join(","))
+    }
+
     fn document(&self, mode: RenderMode, tree: &VNode) -> String {
         let mut t = String::new();
         ssr::escape(&self.title, &mut t);
@@ -207,6 +242,20 @@ impl App {
             "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t}</title>{head}</head><body data-reaxt-mode=\"{mode:?}\">{body}{script}</body></html>"
         )
     }
+}
+
+fn jstr(s: &str) -> String {
+    let mut o = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
 }
 
 #[cfg(test)]

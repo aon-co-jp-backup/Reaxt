@@ -1,0 +1,13 @@
+[package]
+name = "reaxt-db"
+description = "Reaxt のデータベース連携: 安全なパラメータ束縛・Db トレイト・aruaru-db クライアント・DI(依存ゼロ、JSONはRS-JSON)"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/aon-co-jp/Reaxt"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[dependencies]
+rust-json = { path = "../../RS-JSON", default-features = false }

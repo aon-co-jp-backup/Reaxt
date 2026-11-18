@@ -22,3 +22,9 @@ Rust だけで書くフロント+バックエンド統合の枠組み。RPoem(�
 
 ## HANDOFF
 - **2026-11-18**: aruaru-admin の全10画面を移植(ダッシュボード/コミット/ブランチ/クエリ/お引越し/バックアップ/レジストリ/並列化/統合/クラスタ)、実aruaru-serverと実ブラウザで確認。wasmからserde系を排除(RS-JSON `light` + `Wire`トレイト)。**元のReact版との実測**: 元 JS 208KB(gzip 64KB)+CSS 3.7KB に対し、Reaxt版は wasm 366KB(gzip 113KB)+JS 5.4KB で約1.8倍だったが、リリース設定(opt-level z・LTO・panic=abort・strip)で wasm 202KB(gzip 84KB)に縮小=約1.3倍(wasm-optは未導入で未適用)。描画速度は未計測。未了=SETへの配備、`wasm-opt`、RPoem側ワイルドカード(`*slug`)、速度の実測、元アプリの「ウィザード段階表示・スライダー・CPU棒」等の再現。詳細は PORTING.md。
+
+## 2026-11-19 連携の追加(JS/TS・jQuery・Cosmo・DB)
+- `clients/js/`(`reaxt-client.mjs`+`.d.ts`、`reaxt-jquery.js`、`test.mjs`=実サーバー試験)、`GET /_reaxt/manifest.json`、`App::gateway`(外部入口の拡張点)、`reaxt-actions/src/subgraph.rs`(Cosmo向けサブグラフ)、`reaxt-db`(`bind_for`・`Dialect`・`Db`・`AruaruDb`・`PgDb`・`scram`)。
+- 確認済み: Nodeで実サーバー往復、jQuery 3.7.1の実ブラウザ、サブグラフのcurl、aruaru-dbの実SCRAM-SHA-256ログイン+DDL/コミット付き挿入/問い合わせ(`REAXT_LIVE_PG=host:port REAXT_LIVE_PG_USER=.. REAXT_LIVE_PG_PASSWORD=.. cargo test -p reaxt-db --test pg_live`、`REAXT_LIVE_ARUARU=host:port` で GraphQL版)。
+- **未確認・未実装(正直に)**: 実Cosmo Router(wgc compose・Router起動)との接続、実PostgreSQL/CockroachDBへの接続、TLS、接続プール、MySQL/Oracle/SQL Server/Snowflakeのドライバ(方言の束縛のみ)。
+- **aruaru-dbの既知の不具合**: mainは INSERT 内の二重引用符 `''` を戻さず `''` のまま保存する(修正ブランチ `fix/insert-quoted-values` が未マージ)。Reaxt側の束縛は標準どおり。

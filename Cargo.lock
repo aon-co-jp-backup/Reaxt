@@ -2621,6 +2621,7 @@ dependencies = [
  "reaxt",
  "reaxt-actions",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

@@ -34,6 +34,7 @@ fn main() {
             t
         })
         .page("islands.rs", RenderMode::Islands, |_| reaxt_counter::islands_page())
+        .page("portal.rs", RenderMode::Csr, |_| reaxt::react::VNode::element("div").build())
         .asset(
             "/_reaxt/boot.js",
             "text/javascript; charset=utf-8",

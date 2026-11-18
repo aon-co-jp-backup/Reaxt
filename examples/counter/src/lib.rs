@@ -84,6 +84,16 @@ mod boot {
 
     #[wasm_bindgen(start)]
     pub fn start() -> Result<(), JsValue> {
+        // Portalのデモ: /portal では本体の外に #modal-root を作り、そこへ別の木を描く
+        let loc = web_sys::window().and_then(|w| w.location().pathname().ok()).unwrap_or_default();
+        if loc == "/portal" {
+            let doc = web_sys::window().unwrap().document().unwrap();
+            let div = doc.create_element("div")?;
+            div.set_id("modal-root");
+            doc.body().unwrap().append_child(&div)?;
+            reaxt::wasm::mount("#reaxt-root", 1, super::view)?;
+            return reaxt::wasm::portal("#modal-root", 2, super::modal_view).map(|_| ());
+        }
         // ページの描画方式で切り替える(サーバーが body に data-reaxt-mode を付ける)
         if reaxt::wasm::page_mode() == "Islands" {
             reaxt::wasm::mount_islands(&[
@@ -95,4 +105,37 @@ mod boot {
             reaxt::wasm::mount("#reaxt-root", 1, super::view).map(|_| ())
         }
     }
+}
+
+/// Portal+シグナル+batchのデモ(クライアントだけ)。`#modal-root`(本体の外)へ描かれ、
+/// 1回のクリックで2つのシグナルを `batch` で更新→副作用は1回だけ走り、合計が表示に反映される。
+pub fn modal_view() -> VNode {
+    use reaxt::react::{batch, create_effect, create_signal, use_effect, use_ref, Cleanup};
+    let sigs = use_ref(|| (create_signal(1i32), create_signal(1i32)));
+    let runs = use_ref(|| 0u32);
+    let (sum, set_sum) = use_state(|| 2i32);
+    let (runs_shown, set_runs) = use_state(|| 0u32);
+    {
+        let (a, b) = sigs.borrow().clone();
+        let runs = runs.clone();
+        use_effect((), move || {
+            let e = create_effect(move || {
+                *runs.borrow_mut() += 1;
+                set_sum.set(a.get() + b.get());
+                set_runs.set(*runs.borrow());
+            });
+            Some(Box::new(move || e.stop()) as Cleanup)
+        });
+    }
+    let (a, b) = sigs.borrow().clone();
+    let (k, v) = on_click("bump", move || batch(|| {
+        a.set(a.get() + 10);
+        b.set(b.get() + 10);
+    }));
+    VNode::element("div")
+        .attr("id", "modal")
+        .child(VNode::element("span").attr("id", "sum").child(VNode::text(format!("sum={sum}"))).build())
+        .child(VNode::element("span").attr("id", "runs").child(VNode::text(format!("runs={runs_shown}"))).build())
+        .child(VNode::element("button").attr("id", "bump").attr(k, v).child(VNode::text("bump")).build())
+        .build()
 }

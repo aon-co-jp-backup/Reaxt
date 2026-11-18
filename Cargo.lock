@@ -2636,6 +2636,7 @@ name = "reaxt-rpoem"
 version = "0.0.1"
 dependencies = [
  "bytes",
+ "http-body",
  "http-body-util",
  "hyper",
  "open-runo-poem-compat",

@@ -49,6 +49,10 @@ pub fn route(app: Arc<App>) -> Route {
         r = r.at(&p, post(host_handler(app.clone())));
     }
     r = r.at("/_reaxt/manifest.json", get(host_handler(app.clone())));
+    // ストリーミングSSRのページ(GET)
+    for p in app.stream_paths() {
+        r = r.at(&p, get(host_handler(app.clone())));
+    }
     r
 }
 
@@ -56,6 +60,26 @@ pub fn route(app: Arc<App>) -> Route {
 /// CORSが要る場合は、返った `Route` に `.with_cors()` を足す(同一オリジンのBFF構成では不要)。
 pub fn route_production(app: Arc<App>) -> Route {
     route(app).with_tracing().with_compression()
+}
+
+
+/// 複数のチャンクを1つずつ別のフレームとして送るボディ(HTTP/1.1ではchunked転送になる)。
+struct Chunks(std::collections::VecDeque<bytes_like::Bytes>);
+
+impl http_body::Body for Chunks {
+    type Data = bytes_like::Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        std::task::Poll::Ready(self.0.pop_front().map(|b| Ok(http_body::Frame::data(b))))
+    }
+}
+
+fn chunked_body(parts: Vec<String>) -> open_runo_poem_compat::hyper_compat::Body {
+    use http_body_util::BodyExt;
+    Chunks(parts.into_iter().map(|s| bytes_like::Bytes::from(s.into_bytes())).collect()).boxed()
 }
 
 fn host_handler(app: Arc<App>) -> open_runo_poem_compat::Handler {
@@ -88,11 +112,12 @@ fn host_handler(app: Arc<App>) -> open_runo_poem_compat::Handler {
             for (k, v) in &res.headers {
                 b = b.header(k.as_str(), v.as_str());
             }
-            let payload: bytes_like::Bytes = match res.bytes {
-                Some(v) => v.into(),
-                None => res.body.into(),
+            let body = match (res.chunks, res.bytes) {
+                (Some(parts), _) => chunked_body(parts),
+                (None, Some(v)) => hyper_compat::fixed_body(v.into()),
+                (None, None) => hyper_compat::fixed_body(res.body.into()),
             };
-            b.body(hyper_compat::fixed_body(payload)).unwrap_or_else(|_| {
+            b.body(body).unwrap_or_else(|_| {
                 open_runo_poem_compat::empty_status(open_runo_poem_compat::StatusCode::INTERNAL_SERVER_ERROR)
             })
         }
@@ -163,6 +188,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_page_arrives_as_shell_then_replacements_over_rpoem() {
+        use reaxt::stream::{chunks, slot, Pending};
+        let app = Arc::new(
+            App::new("st")
+                .stream(
+                    "/live",
+                    Arc::new(|| {
+                        let shell = VNode::element("main").child(slot(0, VNode::text("wait"))).build();
+                        chunks(&shell, vec![Pending::new(|| VNode::text("ready"))])
+                    }),
+                )
+                .finish(),
+        );
+        let srv = TestServer::start(route(app)).await;
+        let r = srv.request(Method::GET, "/live", &[], None).await;
+        assert_eq!(r.status, 200);
+        let t = r.text();
+        assert!(t.starts_with("<!doctype html>") && t.ends_with("</body></html>"), "{t}");
+        assert!(t.contains("id=\"rx-s-0\"") && t.contains("<template id=\"rx-r-0\">ready</template>"), "{t}");
+        assert!(t.find("wait").unwrap() < t.find("<template").unwrap(), "シェルが先、差し替えが後");
+    }
+
+    #[tokio::test]
     async fn gateway_and_manifest_over_rpoem() {
         use reaxt::app::Response;
         let app = Arc::new(
@@ -174,7 +222,7 @@ mod tests {
                         status: 200,
                         content_type: "application/json; charset=utf-8",
                         headers: vec![],
-                        bytes: None,
+                        bytes: None, chunks: None,
                         body: "{\"ok\":true}".to_string(),
                     }),
                 )

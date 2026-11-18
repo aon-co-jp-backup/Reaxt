@@ -14,6 +14,8 @@ pub struct Response {
     pub body: String,
     /// バイナリ応答(wasm等)。Someなら`body`の代わりにこちらを送る。
     pub bytes: Option<Vec<u8>>,
+    /// ストリーミング応答のチャンク列。Someならホストは順に送れる(結合すると`body`と同じ)。
+    pub chunks: Option<Vec<String>>,
 }
 
 /// Nuxtの`routeRules`相当: パス接頭辞ごとの上書き。`/`終わりでなければ完全一致または`/`区切りの接頭辞。
@@ -59,9 +61,14 @@ pub struct App {
     head: String,
     /// 外部連携の入口(`POST path`)。Connectメソッドを呼ぶ関数を受け取る(GraphQLサブグラフ等で使う)。
     gateways: Vec<(String, Gateway)>,
+    /// ストリーミングSSRのページ(`GET path`)。チャンク列(`stream::chunks`の結果)を返す関数。
+    streams: Vec<(String, StreamPage)>,
 }
 
 /// 外部連携の入口: (リクエスト, Connectメソッド呼び出し関数) → 応答。
+/// ストリーミングページ: チャンク列を返す関数。
+pub type StreamPage = std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
 pub type Gateway = std::sync::Arc<dyn Fn(&Request, &dyn Fn(&str, &str) -> (u16, String)) -> Response + Send + Sync>;
 
 impl App {
@@ -146,6 +153,32 @@ impl App {
         self.backend.paths()
     }
 
+    /// ストリーミングSSRのページを登録する(`GET path`)。`f` は `stream::chunks(..)` の結果(シェル+差し替え)を返す。
+    /// 応答は文書の頭(`<html>`〜シェル)・各差し替え・末尾(`</body></html>`)に分けて返し、結合すると有効なHTMLになる。
+    pub fn stream(mut self, path: &str, f: StreamPage) -> Self {
+        self.streams.push((path.to_string(), f));
+        self
+    }
+
+    /// ストリーミングページのパス一覧(ホスト側のルート登録用)。
+    pub fn stream_paths(&self) -> Vec<String> {
+        self.streams.iter().map(|(p, _)| p.clone()).collect()
+    }
+
+    fn stream_response(&self, f: &StreamPage) -> Response {
+        let cs = f();
+        let mut t = String::new();
+        ssr::escape(&self.title, &mut t);
+        let head = &self.head;
+        let mut parts: Vec<String> = Vec::with_capacity(cs.len() + 1);
+        let mut it = cs.into_iter();
+        let shell = it.next().unwrap_or_default();
+        parts.push(format!("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t}</title>{head}</head><body data-reaxt-mode=\"Ssr\">{shell}"));
+        parts.extend(it);
+        parts.push("</body></html>".to_string());
+        Response { status: 200, content_type: "text/html; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, body: parts.concat(), chunks: Some(parts) }
+    }
+
     /// 外部連携の入口(`POST`)のパス一覧(ホスト側のルート登録用)。
     pub fn gateway_paths(&self) -> Vec<String> {
         self.gateways.iter().map(|(p, _)| p.clone()).collect()
@@ -169,7 +202,12 @@ impl App {
     pub fn dispatch(&self, req: &Request) -> Response {
         let bare = req.path.split(['?', '#']).next().unwrap_or("");
         if req.method == "GET" && bare == "/_reaxt/manifest.json" {
-            return Response { status: 200, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, body: self.manifest() };
+            return Response { status: 200, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, chunks: None, body: self.manifest() };
+        }
+        if req.method == "GET" {
+            if let Some((_, f)) = self.streams.iter().find(|(p, _)| p == bare) {
+                return self.stream_response(f);
+            }
         }
         if req.method == "POST" {
             if let Some((_, g)) = self.gateways.iter().find(|(p, _)| p == bare) {
@@ -182,7 +220,7 @@ impl App {
                 status,
                 content_type: "application/json; charset=utf-8",
                 headers: vec![("cache-control".into(), "no-store".into())],
-                bytes: None,
+                bytes: None, chunks: None,
                 body: json,
             };
         }
@@ -199,21 +237,21 @@ impl App {
             }
         }
         if req.method != "GET" && req.method != "HEAD" {
-            return Response { status: 405, content_type: "text/plain; charset=utf-8", headers, bytes: None, body: "method not allowed".into() };
+            return Response { status: 405, content_type: "text/plain; charset=utf-8", headers, bytes: None, chunks: None, body: "method not allowed".into() };
         }
         if let Some((_, ct, bytes)) = self.assets.iter().find(|(p, _, _)| p == path) {
-            return Response { status: 200, content_type: ct, headers, bytes: Some(bytes.clone()), body: String::new() };
+            return Response { status: 200, content_type: ct, headers, bytes: Some(bytes.clone()), chunks: None, body: String::new() };
         }
         for (route, page) in &self.pages {
             if let Some(params) = matches(route, path) {
                 let mode = rule.and_then(|r| r.mode).unwrap_or(route.mode);
                 crate::hydrate::reset_islands();
                 let tree = page(&params);
-                return Response { status: 200, content_type: "text/html; charset=utf-8", headers, bytes: None, body: self.document(mode, &tree) };
+                return Response { status: 200, content_type: "text/html; charset=utf-8", headers, bytes: None, chunks: None, body: self.document(mode, &tree) };
             }
         }
         let nf = VNode::element("h1").child(VNode::text("404 Not Found")).build();
-        Response { status: 404, content_type: "text/html; charset=utf-8", headers, bytes: None, body: self.document(RenderMode::Ssr, &nf) }
+        Response { status: 404, content_type: "text/html; charset=utf-8", headers, bytes: None, chunks: None, body: self.document(RenderMode::Ssr, &nf) }
     }
 
     /// 公開しているConnectメソッドの一覧(JS/TS・Cosmo連携が読む)。

@@ -36,7 +36,7 @@ fn handle(app: &App, mut conn: TcpStream) -> std::io::Result<()> {
         .and_then(|(_, v)| v.parse().ok())
         .unwrap_or(0);
     let r = if len > crate::backend::MAX_BODY {
-        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], bytes: None, body: "too large".into() }
+        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], bytes: None, chunks: None, body: "too large".into() }
     } else {
         let mut buf = vec![0u8; len];
         rd.read_exact(&mut buf)?;

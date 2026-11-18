@@ -19,6 +19,7 @@ cd my-app && reaxt dev                # ビルド+起動+変更の監視 http://
 - `reaxt-actions/` — Server Actions(型付きConnect呼び出し、JSONはRS-JSON)
 - `reaxt-cli/` — `reaxt` コマンド
 - `examples/counter/` — SSR・Islands・Server Actionsのデモ
+- `examples/aruaru-admin/` — aruaru-admin Webの移植(3画面、実aruaru-serverで確認。`ARUARU_GQL=host:port`で上流指定)
 
 ```bash
 cargo test --workspace

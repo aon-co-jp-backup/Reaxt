@@ -197,6 +197,18 @@ pub fn mount_islands(registry: &[(&str, fn(&str) -> VNode)]) -> Result<usize, Js
     Ok(n)
 }
 
+/// `ms`ミリ秒ごとに`f`を呼ぶ(setInterval)。呼んだあと、状態更新があれば全体を再描画する。
+pub fn every(ms: i32, mut f: impl FnMut() + 'static) {
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        f();
+        flush_all();
+    });
+    if let Some(w) = web_sys::window() {
+        let _ = w.set_interval_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), ms);
+    }
+    cb.forget();
+}
+
 /// サーバーが`<body data-reaxt-mode="...">`に付けた描画方式("Ssr"/"SsrHydrate"/"Csr"/"Islands")。
 pub fn page_mode() -> String {
     web_sys::window()

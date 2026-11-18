@@ -55,9 +55,17 @@ pub struct App {
     /// 静的アセット(`/_reaxt/boot.js`、wasm等): (パス, content-type, 中身)。
     assets: Vec<(String, &'static str, Vec<u8>)>,
     title: String,
+    /// `<head>`に足す任意のHTML(CSSの`<link>`など。信頼できる固定文字列だけを渡すこと)。
+    head: String,
 }
 
 impl App {
+    /// `<head>`に足すHTML(例 `<link rel="stylesheet" href="/_reaxt/app.css">`)。
+    pub fn head(mut self, html: &str) -> Self {
+        self.head.push_str(html);
+        self
+    }
+
     /// 静的アセットを登録する(GET/HEADで返す。長期キャッシュはroute_ruleで)。
     pub fn asset(mut self, path: &str, content_type: &'static str, bytes: Vec<u8>) -> Self {
         self.assets.push((path.to_string(), content_type, bytes));
@@ -194,8 +202,9 @@ impl App {
             RenderMode::Csr => "<div id=\"reaxt-root\"></div>".to_string(),
             _ => format!("<div id=\"reaxt-root\">{}</div>", ssr::render(tree)),
         };
+        let head = &self.head;
         format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t}</title></head><body data-reaxt-mode=\"{mode:?}\">{body}{script}</body></html>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t}</title>{head}</head><body data-reaxt-mode=\"{mode:?}\">{body}{script}</body></html>"
         )
     }
 }

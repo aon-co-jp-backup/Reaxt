@@ -61,3 +61,8 @@ mod tests {
         assert!(c[1].contains("rx-s-0"));
     }
 }
+
+/// 試験・確認用: チャンクを結合した完全なHTML文書(ブラウザの差し替えスクリプトの確認に使う)。
+pub fn to_document(chunks: &[String]) -> String {
+    format!("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{}</body></html>", chunks.concat())
+}

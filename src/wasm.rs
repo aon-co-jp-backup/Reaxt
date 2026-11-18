@@ -194,6 +194,7 @@ pub fn mount(selector: &str, id: ComponentId, render: impl Fn() -> VNode + 'stat
 
     root.set_attribute("data-reaxt-hydrated", if adopted { "adopted" } else { "rebuilt" })?;
     register(rt);
+    flush_all(); // マウント直後の副作用(use_effect)が状態を更新していれば、すぐ描画に反映する
     Ok(adopted)
 }
 
@@ -214,6 +215,7 @@ pub fn mount_islands(registry: &[(&str, fn(&str) -> VNode)]) -> Result<usize, Js
             el.set_attribute("data-reaxt-hydrated", if rt.borrow().adopted { "adopted" } else { "rebuilt" })?;
         }
         register(rt);
+        flush_all(); // マウント直後の副作用(use_effect)が状態を更新していれば、すぐ描画に反映する
     }
     Ok(n)
 }

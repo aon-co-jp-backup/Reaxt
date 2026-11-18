@@ -10,7 +10,7 @@ pub mod vnode;
 pub mod dom_bridge;
 
 pub use app::App;
-pub use signals::{create_effect, create_memo, create_signal, Effect, Memo, Signal};
+pub use signals::{batch, create_effect, create_memo, create_signal, Effect, Memo, Signal};
 pub use boundary::{error_boundary, suspense, Pending};
 pub use diff::{AttrsPatch, ChildPatch, Patch};
 pub use hooks::{

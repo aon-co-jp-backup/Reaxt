@@ -238,3 +238,14 @@ pub fn page_mode() -> String {
         .and_then(|b| b.get_attribute("data-reaxt-mode"))
         .unwrap_or_default()
 }
+
+/// Portal: `selector` の要素(例 `#modal-root`)へ、別の木として描画する。
+/// 要素の位置はページの外側でも構わない(モーダル・トースト等)。クリック・入力のリスナーはその要素に付き、
+/// 状態更新は他の木と同じく `flush_all` で再描画される。
+///
+/// Reactの Portal との違い: 親の木の子ではなく独立した木なので、`provide_context` の値は引き継がれない
+/// (共有したい値はシグナルかコンテキストを子の描画関数の中で提供し直す)。SSRには出ない(クライアントだけ)。
+/// 戻り値は既存DOMを採用できたか(通常は空なので `false`)。
+pub fn portal(selector: &str, id: ComponentId, render: impl Fn() -> VNode + 'static) -> Result<bool, JsValue> {
+    mount(selector, id, render)
+}

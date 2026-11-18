@@ -14,6 +14,27 @@ struct Node {
 
 thread_local! {
     static OBSERVER: RefCell<Vec<Rc<Node>>> = RefCell::new(Vec::new());
+    /// `batch` の入れ子の深さと、その間に溜まった再実行待ち(重複なし)。
+    static BATCH: RefCell<(u32, Vec<Rc<Node>>)> = RefCell::new((0, Vec::new()));
+}
+
+/// 複数の `set` をまとめ、`f` が終わった時点で、影響を受けた副作用を1回ずつだけ再実行する。入れ子可。
+pub fn batch<R>(f: impl FnOnce() -> R) -> R {
+    BATCH.with(|b| b.borrow_mut().0 += 1);
+    let r = f();
+    let pending = BATCH.with(|b| {
+        let mut b = b.borrow_mut();
+        b.0 -= 1;
+        if b.0 == 0 {
+            std::mem::take(&mut b.1)
+        } else {
+            Vec::new()
+        }
+    });
+    for n in pending {
+        run(&n);
+    }
+    r
 }
 
 fn run(node: &Rc<Node>) {
@@ -80,7 +101,19 @@ impl<T: Clone + 'static> Signal<T> {
             inner.subs.iter().filter_map(|s| s.node.upgrade()).collect()
         };
         for n in targets {
-            run(&n);
+            let queued = BATCH.with(|b| {
+                let mut b = b.borrow_mut();
+                if b.0 == 0 {
+                    return false;
+                }
+                if !b.1.iter().any(|x| Rc::ptr_eq(x, &n)) {
+                    b.1.push(n.clone());
+                }
+                true
+            });
+            if !queued {
+                run(&n);
+            }
         }
     }
 
@@ -187,6 +220,21 @@ mod tests {
         n.set(3); // 偶奇は同じ→購読者は起きない
         n.set(4);
         assert_eq!(*log.borrow(), vec![1, 0]);
+    }
+
+    #[test]
+    fn batch_runs_each_effect_once_and_nests() {
+        let a = create_signal(1);
+        let b = create_signal(1);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (l, a2, b2) = (log.clone(), a.clone(), b.clone());
+        let _e = create_effect(move || l.borrow_mut().push(a2.get() + b2.get()));
+        batch(|| {
+            a.set(10);
+            batch(|| b.set(20));
+            assert_eq!(log.borrow().len(), 1, "batch中は再実行しない");
+        });
+        assert_eq!(*log.borrow(), vec![2, 30]);
     }
 
     #[test]

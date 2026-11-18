@@ -52,6 +52,12 @@ pub fn route(app: Arc<App>) -> Route {
     r
 }
 
+/// 本番向けの既定: `route` にRPoemのトレース(要求ごとのログ)と圧縮を重ねる。
+/// CORSが要る場合は、返った `Route` に `.with_cors()` を足す(同一オリジンのBFF構成では不要)。
+pub fn route_production(app: Arc<App>) -> Route {
+    route(app).with_tracing().with_compression()
+}
+
 fn host_handler(app: Arc<App>) -> open_runo_poem_compat::Handler {
     handler_fn(move |req, _params| {
         let app = app.clone();
@@ -137,6 +143,23 @@ mod tests {
         assert!(denied.text().contains("unauthenticated"));
         let page = srv.request(Method::GET, "/", &[], None).await;
         assert_eq!(page.header("cache-control"), Some("public, max-age=30"));
+    }
+
+    #[tokio::test]
+    async fn production_layers_keep_pages_and_actions_working() {
+        use reaxt::backend::Module;
+        let app = Arc::new(
+            App::new("pl")
+                .page("index.rs", RenderMode::Ssr, |_| VNode::element("h1").child(VNode::text("hi")).build())
+                .module(Module::new().method("demo.v1.Echo", "Say", |_, b| Ok(format!("{{\"got\":{b}}}"))))
+                .finish(),
+        );
+        let srv = TestServer::start(route_production(app)).await;
+        let top = srv.request(Method::GET, "/", &[], None).await;
+        assert_eq!(top.status, 200);
+        assert!(top.text().contains("<h1>hi</h1>"));
+        let a = srv.request(Method::POST, "/demo.v1.Echo/Say", &[("content-type", "application/json")], Some(b"{\"a\":1}".to_vec())).await;
+        assert_eq!((a.status, a.text().as_str()), (200, "{\"got\":{\"a\":1}}"));
     }
 
     #[tokio::test]

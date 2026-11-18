@@ -173,6 +173,7 @@ impl App {
         for (route, page) in &self.pages {
             if let Some(params) = matches(route, path) {
                 let mode = rule.and_then(|r| r.mode).unwrap_or(route.mode);
+                crate::hydrate::reset_islands();
                 let tree = page(&params);
                 return Response { status: 200, content_type: "text/html; charset=utf-8", headers, bytes: None, body: self.document(mode, &tree) };
             }

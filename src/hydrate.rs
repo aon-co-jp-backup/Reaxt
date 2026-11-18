@@ -126,8 +126,73 @@ thread_local! {
 /// クリックハンドラを登録し、要素に付ける属性(名前, 値)を返す。
 /// 例: `VNode::element("button").attr(attr.0, attr.1)`。
 pub fn on_click(id: &str, f: impl Fn() + 'static) -> (&'static str, String) {
-    CLICKS.with(|c| c.borrow_mut().insert(id.to_string(), Rc::new(f)));
-    (CLICK_ATTR, id.to_string())
+    // アイランド内ではidに`<scope>:`を前置して、同じidの部品が複数あっても衝突させない
+    let scope = SCOPE.with(|s| s.get());
+    let key = if scope == 0 { id.to_string() } else { format!("{scope}:{id}") };
+    CLICKS.with(|c| c.borrow_mut().insert(key.clone(), Rc::new(f)));
+    (CLICK_ATTR, key)
+}
+
+// ---- Islands(静的HTMLの一部だけを対話化) ----
+
+pub const ISLAND_ATTR: &str = "data-rx-island";
+pub const PROPS_ATTR: &str = "data-rx-props";
+pub const SCOPE_ATTR: &str = "data-rx-scope";
+
+thread_local! {
+    static SCOPE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static NEXT_ISLAND: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+}
+
+/// `f`の間だけスコープ(アイランド番号)を切り替える。
+pub fn with_scope<T>(scope: u32, f: impl FnOnce() -> T) -> T {
+    let prev = SCOPE.with(|s| s.replace(scope));
+    let r = f();
+    SCOPE.with(|s| s.set(prev));
+    r
+}
+
+/// ページの描画の頭で呼ぶ(アイランド番号を1から振り直す。サーバーとブラウザで同じ並びになる)。
+pub fn reset_islands() {
+    NEXT_ISLAND.with(|n| n.set(1));
+}
+
+/// アイランドのコンポーネントID(スコープから決まる)。
+pub fn island_component_id(scope: u32) -> ComponentId {
+    1_000_000 + scope as ComponentId
+}
+
+/// サーバー側: アイランドを描画して、印(`data-rx-island`/`-props`/`-scope`)付きのdivで包む。
+/// ブラウザ側は印を見て、その部分だけをマウントする。`props`は任意の文字列(通常はJSON)。
+pub fn island(name: &str, props: &str, render: fn(&str) -> VNode) -> VNode {
+    let scope = NEXT_ISLAND.with(|n| n.replace(n.get() + 1));
+    let id = island_component_id(scope);
+    let tree = with_scope(scope, || crate::react::run_component(id, || render(props)));
+    crate::react::hooks::drop_instance(id);
+    VNode::element("div")
+        .attr(ISLAND_ATTR, name)
+        .attr(PROPS_ATTR, props)
+        .attr(SCOPE_ATTR, scope.to_string())
+        .child(tree)
+        .build()
+}
+
+/// ブラウザ側: 印の付いた各ルートをマウントする(登録簿に無い名前は無視)。
+pub fn mount_islands<D: Dom>(
+    dom: Rc<D>,
+    roots: Vec<D::Node>,
+    registry: &[(&str, fn(&str) -> VNode)],
+) -> Vec<Runtime<D>> {
+    let mut out = Vec::new();
+    for root in roots {
+        let (Some(name), Some(scope)) = (dom.attr(&root, ISLAND_ATTR), dom.attr(&root, SCOPE_ATTR)) else { continue };
+        let Some(scope) = scope.parse::<u32>().ok().filter(|s| *s > 0) else { continue };
+        let Some((_, render)) = registry.iter().find(|(n, _)| *n == name) else { continue };
+        let render = *render;
+        let props = dom.attr(&root, PROPS_ATTR).unwrap_or_default();
+        out.push(Runtime::mount_scoped(dom.clone(), root, island_component_id(scope), scope, move || render(&props)));
+    }
+    out
 }
 
 /// 登録済みハンドラを実行する。存在すれば`true`。
@@ -170,7 +235,13 @@ impl<D: Dom> Runtime<D> {
     /// `root`は`#reaxt-root`相当。中身がSSR出力と一致すれば採用(`adopted`)、
     /// 空または不一致なら作り直す(CSR/不一致時のフォールバック)。
     pub fn mount(dom: Rc<D>, root: D::Node, id: ComponentId, render: impl Fn() -> VNode + 'static) -> Self {
-        let app = App::mount(id, Box::new(render) as Box<dyn Fn() -> VNode>);
+        Self::mount_scoped(dom, root, id, 0, render)
+    }
+
+    /// アイランド用: 再レンダーのたびに`scope`を有効にする(`on_click`のid名前空間)。
+    pub fn mount_scoped(dom: Rc<D>, root: D::Node, id: ComponentId, scope: u32, render: impl Fn() -> VNode + 'static) -> Self {
+        let wrapped = move || with_scope(scope, &render);
+        let app = App::mount(id, Box::new(wrapped) as Box<dyn Fn() -> VNode>);
         let kids = dom.children(&root);
         let adopted = kids.len() == 1 && matches_dom(&*dom, &kids[0], app.tree());
         if !adopted {
@@ -193,6 +264,11 @@ impl<D: Dom> Runtime<D> {
             }
             None => false,
         }
+    }
+
+    /// マウント先のルートノード。
+    pub fn root_node(&self) -> D::Node {
+        self.root.clone()
     }
 
     /// 現在のツリー(テスト・デバッグ用)。
@@ -324,6 +400,55 @@ mod tests {
         assert_eq!(html(&root), format!("<div><div><p>count=2</p><button data-rx-click=\"inc\">+</button></div></div>"));
         assert!(!rt.flush(), "状態が変わらなければ何もしない");
         crate::react::hooks::drop_instance(9002);
+    }
+
+    fn island_counter(props: &str) -> VNode {
+        let start: i32 = props.parse().unwrap_or(0);
+        let (n, set) = use_state(|| start);
+        let (k, v) = on_click("inc", move || set.update(|c| c + 1));
+        VNode::element("div")
+            .child(VNode::element("span").child(VNode::text(format!("n={n}"))).build())
+            .child(VNode::element("button").attr(k, v).child(VNode::text("+")).build())
+            .build()
+    }
+
+    #[test]
+    fn islands_are_independent_even_with_the_same_handler_id() {
+        // サーバー: 静的ページに2つのアイランド(propsが違う)
+        reset_islands();
+        let page = VNode::element("main")
+            .child(VNode::element("h1").child(VNode::text("static")).build())
+            .child(island("counter", "5", island_counter))
+            .child(island("counter", "10", island_counter))
+            .build();
+        let html_ssr = ssr::render(&page);
+        assert!(html_ssr.contains("data-rx-scope=\"1\"") && html_ssr.contains("data-rx-scope=\"2\""));
+        assert!(html_ssr.contains("data-rx-click=\"1:inc\"") && html_ssr.contains("data-rx-click=\"2:inc\""));
+
+        // ブラウザ相当: SSRのDOMから、印のついた要素だけを取ってマウント
+        let d = Rc::new(MemDom);
+        let page_dom = d.create(&page);
+        let islands: Vec<N> = page_dom.borrow().kids.iter().skip(1).cloned().collect();
+        let buttons: Vec<N> = islands.iter().map(|i| i.borrow().kids[0].borrow().kids[1].clone()).collect();
+        let mut rts = mount_islands(d.clone(), islands.clone(), &[("counter", island_counter)]);
+        assert_eq!(rts.len(), 2);
+        assert!(rts.iter().all(|r| r.adopted), "どちらも既存DOMを採用");
+        assert!(Rc::ptr_eq(&islands[0].borrow().kids[0].borrow().kids[1], &buttons[0]));
+
+        // 2番目だけを押す → 2番目だけが変わる(1番目はそのまま)
+        assert!(dispatch_click("2:inc"));
+        // ブラウザでは押したアイランドのリスナーだけがflushする(既知の制約: 更新フラグは全体で1つ)
+        assert!(rts[1].flush());
+        assert!(!rts[0].flush(), "もう更新は無い");
+        assert!(html(&islands[1]).contains("n=11"));
+        assert!(html(&islands[0]).contains("n=5"));
+        // 静的部分は一切触られない
+        assert_eq!(html(&page_dom.borrow().kids[0]), "<h1>static</h1>");
+        // 未登録の名前は無視される
+        assert!(mount_islands(d, islands, &[("other", island_counter)]).is_empty());
+        for s in 1..=2 {
+            crate::react::hooks::drop_instance(island_component_id(s));
+        }
     }
 
     #[test]

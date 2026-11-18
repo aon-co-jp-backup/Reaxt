@@ -22,6 +22,7 @@ fn main() {
             drop_instance(1);
             t
         })
+        .page("islands.rs", RenderMode::Islands, |_| reaxt_counter::islands_page())
         .asset(
             "/_reaxt/boot.js",
             "text/javascript; charset=utf-8",

@@ -143,3 +143,43 @@ pub fn mount(selector: &str, id: ComponentId, render: impl Fn() -> VNode + 'stat
     RUNTIME.with(|r| *r.borrow_mut() = Some(rt));
     Ok(adopted)
 }
+
+/// 印(`data-rx-island`)の付いた全要素を探し、登録簿にある名前のものだけをマウントする(Islands)。
+/// 各アイランドのルートにだけクリックリスナーを付け、押されたアイランドだけを再描画する。
+/// 戻り値はマウントできた数。
+pub fn mount_islands(registry: &[(&str, fn(&str) -> VNode)]) -> Result<usize, JsValue> {
+    let dom = Rc::new(WebDom::new());
+    let list = dom.doc.query_selector_all(&format!("[{}]", crate::hydrate::ISLAND_ATTR))?;
+    let roots: Vec<Node> = (0..list.length()).filter_map(|i| list.item(i)).collect();
+    let rts = crate::hydrate::mount_islands(dom.clone(), roots, registry);
+    let n = rts.len();
+    for rt in rts {
+        let root_node = rt.root_node();
+        let rt = Rc::new(RefCell::new(rt));
+        let (rt2, dom2, rn) = (rt.clone(), dom.clone(), root_node.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            let Some(target) = ev.target().and_then(|t| t.dyn_into::<Node>().ok()) else { return };
+            let hit = click_at(&*dom2, &target, |n| n.parent_node(), |n| n.is_same_node(Some(&rn)));
+            if hit {
+                rt2.borrow_mut().flush();
+            }
+        });
+        root_node.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+        cb.forget();
+        if let Some(el) = root_node.dyn_ref::<Element>() {
+            el.set_attribute("data-reaxt-hydrated", if rt.borrow().adopted { "adopted" } else { "rebuilt" })?;
+        }
+        // 生かしておく(リスナーが参照するので、ここで落とさない)
+        std::mem::forget(rt);
+    }
+    Ok(n)
+}
+
+/// サーバーが`<body data-reaxt-mode="...">`に付けた描画方式("Ssr"/"SsrHydrate"/"Csr"/"Islands")。
+pub fn page_mode() -> String {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.body())
+        .and_then(|b| b.get_attribute("data-reaxt-mode"))
+        .unwrap_or_default()
+}

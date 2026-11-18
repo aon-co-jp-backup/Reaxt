@@ -42,4 +42,5 @@ JSON は RS-JSON(`from_str_secure`)。
 - Next相当: `pages/`規約・SSR。React相当: `src/react/`(旧RS-React)。
 - RPoem上で GET(ページ)/POST(Connect)とも実サーバーで確認済み(28+3テスト)。
 - 段階2(済): ハイドレーション。`hydrate.rs`(Domトレイト・Patch適用・SSR DOMの採用/不一致時の作り直し・イベント委譲`data-rx-click`・Runtime)をネイティブでテスト(3件)、`wasm.rs`(web-sys)で実ブラウザ確認(SSR DOM採用・ボタン非再生成・クリックで更新・コンソールエラー0・wasm 130KB)。デモは`examples/counter`(`serve`バイナリ)、`App::asset`でboot.js/wasmを配信。
-- 未実装: Islands、Server Actionsの自動生成、`*slug`のRPoem側ワイルドカード。
+- Islands(済): `hydrate::island(name, props, render)` で静的ページ中の部品に印(`data-rx-island`/`-props`/`-scope`)を付け、ブラウザは印の部分だけをマウント(`mount_islands`)。クリックidはアイランド番号で名前空間化(同じ部品を複数置いても独立)。ネイティブテスト+実ブラウザ確認(2つのアイランドが独立、静的部分は不変、wasm 152KB)。既知の制約: 更新フラグが全体で1つなので、押したアイランドのリスナーだけがflushする前提(タイマー等の非クリック更新は未対応)。
+- 未実装: Server Actionsの自動生成、`*slug`のRPoem側ワイルドカード。

@@ -1,67 +1,73 @@
 //! aruaru-admin Web の Reaxt 版(移植の実験)。枠・状態表示・ダッシュボード・コミット履歴・ブランチ。
 //! 元は React+TypeScript+Tailwind。ここはRustのみ。データはServer Action経由でaruaru-serverのGraphQLへ。
+//! JSONはRS-JSONの`light`(依存ゼロ、serde/serde_json無し)で読み書きする。
 use reaxt::hydrate::on_click;
 use reaxt::react::{use_state, StateSetter, VNode};
-use reaxt_actions::Action;
+use reaxt_actions::{bool_field, obj_json, quote_json, str_field, Action, Wire};
+use rust_json::LightValue;
 pub mod ops;
-use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 
-#[derive(Serialize, Deserialize)]
 pub struct GqlIn {
     pub query: String,
 }
-#[derive(Serialize, Deserialize)]
+impl Wire for GqlIn {
+    fn to_wire(&self) -> String {
+        obj_json(&[("query", quote_json(&self.query))])
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        Ok(GqlIn { query: str_field(v, "query")? })
+    }
+}
 pub struct GqlOut {
     pub body: String,
+}
+impl Wire for GqlOut {
+    fn to_wire(&self) -> String {
+        obj_json(&[("body", quote_json(&self.body))])
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        Ok(GqlOut { body: str_field(v, "body")? })
+    }
 }
 /// 画面→サーバー(BFF)→aruaru-server の GraphQL(問い合わせ専用)。
 pub const GQL: Action<GqlIn, GqlOut> = Action::new("aruaru_admin.v1.Proxy", "Graphql");
 
-#[derive(Serialize, Deserialize)]
 pub struct SqlIn {
     pub sql: String,
     pub auto_commit: bool,
+}
+impl Wire for SqlIn {
+    fn to_wire(&self) -> String {
+        obj_json(&[("sql", quote_json(&self.sql)), ("auto_commit", self.auto_commit.to_string())])
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        Ok(SqlIn { sql: str_field(v, "sql")?, auto_commit: bool_field(v, "auto_commit")? })
+    }
 }
 /// SQL実行(書き込み)。サーバー側で`execSql`のmutationを組み立てて中継する。
 pub const SQL: Action<SqlIn, GqlOut> = Action::new("aruaru_admin.v1.Proxy", "ExecSql");
 
 /// `execSql` の GraphQL mutation を作る(SQL文字列はJSON文字列と同じ規則でエスケープ)。
 pub fn exec_sql_mutation(sql: &str, auto_commit: bool) -> Result<String, String> {
-    let s = rust_json::to_string_strict(&sql).map_err(|e| e.to_string())?;
+    let s = quote_json(sql);
     Ok(format!("mutation {{ execSql(sql: {s}, autoCommit: {auto_commit}, commitMessage: \"aruaru-admin\") {{ success commitId message }} }}"))
 }
 
 pub const QUERY: &str = "query { currentBranch branches { name headCommitId isCurrent } log(limit: 50) { shortId author message timestamp } }";
 
-#[derive(Deserialize, Clone, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Branch {
     pub name: String,
-    #[serde(rename = "headCommitId")]
     pub head: String,
-    #[serde(rename = "isCurrent")]
     pub current: bool,
 }
-#[derive(Deserialize, Clone, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Commit {
-    #[serde(rename = "shortId")]
     pub short: String,
     pub author: String,
     pub message: String,
     pub timestamp: String,
-}
-#[derive(Deserialize, Default)]
-struct Data {
-    #[serde(default, rename = "currentBranch")]
-    current: String,
-    #[serde(default)]
-    branches: Vec<Branch>,
-    #[serde(default)]
-    log: Vec<Commit>,
-}
-#[derive(Deserialize)]
-struct Resp {
-    data: Option<Data>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -74,11 +80,17 @@ pub struct Snap {
     pub err: String,
 }
 
+fn s(v: &LightValue, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+}
+
 /// GraphQL応答のJSON(RS-JSONで上限つき読み込み)から画面用の状態を作る。
 pub fn parse_snap(body: &str) -> Result<Snap, String> {
-    let r: Resp = rust_json::from_str_secure(body, &rust_json::Limits::small()).map_err(|e| e.to_string())?;
-    let d = r.data.ok_or("data がありません")?;
-    Ok(Snap { online: Some(true), current: d.current, branches: d.branches, commits: d.log, err: String::new() })
+    let r = rust_json::parse_light_secure(body, &rust_json::LightLimits::small()).map_err(|e| e.to_string())?;
+    let d = r.get("data").filter(|d| d.as_object().is_some()).ok_or("data がありません")?;
+    let branches = d.get("branches").and_then(|x| x.as_array()).unwrap_or_default().iter().map(|b| Branch { name: s(b, "name"), head: s(b, "headCommitId"), current: b.get("isCurrent").and_then(|x| x.as_bool()).unwrap_or(false) }).collect();
+    let commits = d.get("log").and_then(|x| x.as_array()).unwrap_or_default().iter().map(|c| Commit { short: s(c, "shortId"), author: s(c, "author"), message: s(c, "message"), timestamp: s(c, "timestamp") }).collect();
+    Ok(Snap { online: Some(true), current: s(d, "currentBranch"), branches, commits, err: String::new() })
 }
 
 thread_local! {

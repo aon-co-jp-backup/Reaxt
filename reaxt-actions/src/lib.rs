@@ -5,8 +5,7 @@
 //!
 //! 通信はConnect単純呼び出し(`POST /pkg.Service/Method`、本文JSON)のみで、RESTは作らない。
 use reaxt::backend::{Ctx, Denied, Module};
-use rust_json::{from_str_secure, to_string_strict, Limits};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use rust_json::{parse_light_secure, LightLimits, LightValue};
 use std::marker::PhantomData;
 
 #[cfg(target_arch = "wasm32")]
@@ -32,22 +31,22 @@ impl<I, O> Action<I, O> {
 pub trait ModuleActions: Sized {
     fn action<I, O, F>(self, a: &Action<I, O>, f: F) -> Self
     where
-        I: DeserializeOwned + 'static,
-        O: Serialize + 'static,
+        I: Wire + 'static,
+        O: Wire + 'static,
         F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static;
 }
 
 impl ModuleActions for Module {
     fn action<I, O, F>(self, a: &Action<I, O>, f: F) -> Self
     where
-        I: DeserializeOwned + 'static,
-        O: Serialize + 'static,
+        I: Wire + 'static,
+        O: Wire + 'static,
         F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static,
     {
         self.method(a.service, a.method, move |ctx, body| {
-            let input: I = from_str_secure(body, &Limits::small()).map_err(|e| Denied::new(400, e.to_string()))?;
+            let input = decode::<I>(body).map_err(|e| Denied::new(400, e))?;
             let out = f(ctx, input)?;
-            to_string_strict(&out).map_err(|e| Denied::new(500, e.to_string()))
+            Ok(out.to_wire())
         })
     }
 }
@@ -80,31 +79,100 @@ pub trait Client {
     fn post(&self, path: &str, body: String, cb: Box<dyn FnOnce(RawResult)>);
 }
 
-#[derive(Deserialize)]
-struct ErrBody {
-    code: String,
-    message: String,
+/// Actionの入出力型が実装する、serde不要のJSON変換(読みはRS-JSONの`light`、上限・重複キー拒否つき)。
+/// `to_wire`はコンパクトなJSON文字列、`from_wire`は読み込み済みの値から作る。
+pub trait Wire: Sized {
+    fn to_wire(&self) -> String;
+    fn from_wire(v: &LightValue) -> Result<Self, String>;
 }
+
+impl Wire for () {
+    fn to_wire(&self) -> String {
+        "null".into()
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        if *v == LightValue::Null { Ok(()) } else { Err("null が必要です".into()) }
+    }
+}
+macro_rules! wire_int {
+    ($($t:ty),*) => {$(
+        impl Wire for $t {
+            fn to_wire(&self) -> String { self.to_string() }
+            fn from_wire(v: &LightValue) -> Result<Self, String> {
+                v.as_i64().and_then(|n| <$t>::try_from(n).ok()).ok_or_else(|| "整数が必要です(範囲外かも)".to_string())
+            }
+        }
+    )*};
+}
+wire_int!(u8, u16, u32, i32, i64, usize);
+impl Wire for bool {
+    fn to_wire(&self) -> String {
+        self.to_string()
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        v.as_bool().ok_or_else(|| "真偽値が必要です".into())
+    }
+}
+impl Wire for String {
+    fn to_wire(&self) -> String {
+        rust_json::quote_json(self)
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        v.as_str().map(str::to_string).ok_or_else(|| "文字列が必要です".into())
+    }
+}
+impl<T: Wire> Wire for Vec<T> {
+    fn to_wire(&self) -> String {
+        format!("[{}]", self.iter().map(Wire::to_wire).collect::<Vec<_>>().join(","))
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        v.as_array().ok_or("配列が必要です")?.iter().map(T::from_wire).collect()
+    }
+}
+
+/// 上限つきでJSON本文を読んで`T`にする。
+pub fn decode<T: Wire>(json: &str) -> Result<T, String> {
+    let v = parse_light_secure(json, &LightLimits::small()).map_err(|e| e.to_string())?;
+    T::from_wire(&v)
+}
+
+/// 必須の文字列フィールドを取り出す(`from_wire`の実装用)。
+pub fn str_field(v: &LightValue, k: &str) -> Result<String, String> {
+    v.get(k).and_then(|x| x.as_str()).map(str::to_string).ok_or_else(|| format!("文字列フィールド {k} がありません"))
+}
+/// 必須の真偽値フィールド。
+pub fn bool_field(v: &LightValue, k: &str) -> Result<bool, String> {
+    v.get(k).and_then(|x| x.as_bool()).ok_or_else(|| format!("真偽値フィールド {k} がありません"))
+}
+/// 必須の整数フィールド。
+pub fn int_field(v: &LightValue, k: &str) -> Result<i64, String> {
+    v.get(k).and_then(|x| x.as_i64()).ok_or_else(|| format!("整数フィールド {k} がありません"))
+}
+
+/// 1つの文字列フィールドだけのオブジェクト(`{"k":"v"}`)を書き出す補助。
+pub fn obj_json(fields: &[(&str, String)]) -> String {
+    format!("{{{}}}", fields.iter().map(|(k, v)| format!("{}:{v}", rust_json::quote_json(k))).collect::<Vec<_>>().join(","))
+}
+pub use rust_json::quote_json;
 
 /// 型付きで呼び出す。`cb`は応答(または失敗)で1回だけ呼ばれる。
 pub fn call<I, O>(client: &dyn Client, a: &Action<I, O>, input: &I, cb: impl FnOnce(Result<O, ActionError>) + 'static)
 where
-    I: Serialize,
-    O: DeserializeOwned + 'static,
+    I: Wire,
+    O: Wire + 'static,
 {
-    let body = match to_string_strict(input) {
-        Ok(b) => b,
-        Err(e) => return cb(Err(ActionError::Decode(e.to_string()))),
-    };
     client.post(
         &a.path(),
-        body,
+        input.to_wire(),
         Box::new(move |raw| {
             cb(match raw {
                 Err(e) => Err(ActionError::Transport(e)),
-                Ok((200, json)) => from_str_secure::<O>(&json, &Limits::small()).map_err(|e| ActionError::Decode(e.to_string())),
-                Ok((status, json)) => match from_str_secure::<ErrBody>(&json, &Limits::small()) {
-                    Ok(e) => Err(ActionError::Server { status, code: e.code, message: e.message }),
+                Ok((200, json)) => decode::<O>(&json).map_err(ActionError::Decode),
+                Ok((status, json)) => match parse_light_secure(&json, &LightLimits::small()) {
+                    Ok(e) => match (str_field(&e, "code"), str_field(&e, "message")) {
+                        (Ok(code), Ok(message)) => Err(ActionError::Server { status, code, message }),
+                        _ => Err(ActionError::Server { status, code: "unknown".into(), message: json }),
+                    },
                     Err(_) => Err(ActionError::Server { status, code: "unknown".into(), message: json }),
                 },
             })
@@ -134,15 +202,31 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    #[derive(Debug, PartialEq)]
     struct Add {
         by: u32,
     }
-    #[derive(Serialize, Deserialize, Debug, PartialEq)]
+    #[derive(Debug, PartialEq)]
     struct Total {
         total: u32,
     }
     const ADD: Action<Add, Total> = Action::new("demo.v1.Counter", "Add");
+    impl Wire for Add {
+        fn to_wire(&self) -> String {
+            obj_json(&[("by", self.by.to_string())])
+        }
+        fn from_wire(v: &LightValue) -> Result<Self, String> {
+            Ok(Add { by: int_field(v, "by")? as u32 })
+        }
+    }
+    impl Wire for Total {
+        fn to_wire(&self) -> String {
+            obj_json(&[("total", self.total.to_string())])
+        }
+        fn from_wire(v: &LightValue) -> Result<Self, String> {
+            Ok(Total { total: int_field(v, "total")? as u32 })
+        }
+    }
 
     fn app() -> App {
         let counter = Arc::new(AtomicU32::new(0));
@@ -160,7 +244,7 @@ mod tests {
             .finish()
     }
 
-    fn run<O: DeserializeOwned + 'static>(c: &LocalClient, a: &Action<Add, O>, by: u32) -> Result<O, ActionError> {
+    fn run<O: Wire + 'static>(c: &LocalClient, a: &Action<Add, O>, by: u32) -> Result<O, ActionError> {
         let out = Rc::new(RefCell::new(None));
         let o2 = out.clone();
         call(c, a, &Add { by }, move |r| *o2.borrow_mut() = Some(r));

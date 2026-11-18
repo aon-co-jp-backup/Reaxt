@@ -61,7 +61,7 @@ fn main() {
         .module(reaxt::backend::Module::new().action(&aruaru_admin_reaxt::SQL, move |_, i: aruaru_admin_reaxt::SqlIn| {
             // 書き込みはこの専用口だけ(トークンなどはサーバー側に置き、ブラウザへは出さない)
             let m = aruaru_admin_reaxt::exec_sql_mutation(&i.sql, i.auto_commit).map_err(|e| Denied::new(400, e))?;
-            let q = rust_json::to_string_strict(&m).map_err(|e| Denied::new(500, e.to_string()))?;
+            let q = rust_json::quote_json(&m);
             http_post(&up2, "/graphql", &format!("{{\"query\":{q}}}")).map(|body| GqlOut { body }).map_err(|e| Denied::new(502, e))
         }).action(&aruaru_admin_reaxt::ops::ADM, move |_, i: aruaru_admin_reaxt::ops::AdmIn| {
             // 管理操作は許可リストのメソッドだけ中継(トークンはサーバー側の環境変数)
@@ -75,7 +75,7 @@ fn main() {
             if i.query.trim_start().starts_with("mutation") {
                 return Err(Denied::new(403, "mutation は中継しません"));
             }
-            let q = rust_json::to_string_strict(&i.query).map_err(|e| Denied::new(500, e.to_string()))?;
+            let q = rust_json::quote_json(&i.query);
             let body = format!("{{\"query\":{q}}}");
             http_post(&upstream, "/graphql", &body).map(|body| GqlOut { body }).map_err(|e| Denied::new(502, e))
         }))

@@ -107,8 +107,6 @@ dependencies = [
  "reaxt",
  "reaxt-actions",
  "rust-json 0.1.0",
- "serde",
- "serde_json",
  "wasm-bindgen",
 ]
 
@@ -2607,7 +2605,6 @@ dependencies = [
  "js-sys",
  "reaxt",
  "rust-json 0.1.0",
- "serde",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2831,11 +2828,6 @@ dependencies = [
 [[package]]
 name = "rust-json"
 version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
 
 [[package]]
 name = "rust-json"

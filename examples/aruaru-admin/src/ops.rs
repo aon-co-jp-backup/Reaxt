@@ -3,16 +3,23 @@
 use crate::{node, t};
 use reaxt::hydrate::{on_click, on_input};
 use reaxt::react::{StateSetter, VNode};
-use reaxt_actions::Action;
-use serde::{Deserialize, Serialize};
+use reaxt_actions::{obj_json, quote_json, str_field, Action, Wire};
+use rust_json::LightValue;
 use std::collections::BTreeMap;
 
-#[derive(Serialize, Deserialize)]
 pub struct AdmIn {
     pub method: String,
     pub body: String,
 }
 /// 管理操作(Connect)の中継。トークンはサーバー側が付ける。
+impl Wire for AdmIn {
+    fn to_wire(&self) -> String {
+        obj_json(&[("method", quote_json(&self.method)), ("body", quote_json(&self.body))])
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        Ok(AdmIn { method: str_field(v, "method")?, body: str_field(v, "body")? })
+    }
+}
 pub const ADM: Action<AdmIn, crate::GqlOut> = Action::new("aruaru_admin.v1.Proxy", "Admin");
 
 #[derive(Clone, Default)]
@@ -30,7 +37,7 @@ impl Ops {
 }
 
 pub fn q(s: &str) -> String {
-    rust_json::to_string_strict(&s).unwrap_or_else(|_| "\"\"".into())
+    quote_json(s)
 }
 
 /// 画面ごとの実行要求(送る先と本文)。ネイティブでもテストできる純粋関数で組み立てる。
@@ -136,34 +143,34 @@ fn btn(set: &StateSetter<Ops>, o: &Ops, op: &'static str, label: &str) -> VNode 
 
 /// JSON文字列を汎用表示にする(オブジェクトの配列=表、オブジェクト=キー値カード、他=整形文字列)。
 pub fn json_view(raw: &str) -> VNode {
-    let v: serde_json::Value = match rust_json::parse_secure(raw, &rust_json::Limits::small()) {
+    let v = match rust_json::parse_light_secure(raw, &rust_json::LightLimits::small()) {
         Ok(v) => v,
         Err(_) => return VNode::element("pre").child(t(raw.to_string())).build(),
     };
     let v = v.get("data").cloned().unwrap_or(v);
     // GraphQLの data は {フィールド名: 値}。1フィールドなら値だけ取り出す
     let v = match v.as_object() {
-        Some(m) if m.len() == 1 => m.values().next().cloned().unwrap_or_default(),
+        Some([(_, only)]) => only.clone(),
         _ => v,
     };
     render(&v)
 }
 
-fn cell(v: &serde_json::Value) -> String {
+fn cell(v: &LightValue) -> String {
     match v {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Null => String::new(),
-        other => other.to_string(),
+        LightValue::Str(s) => s.clone(),
+        LightValue::Null => String::new(),
+        other => other.to_json(),
     }
 }
 
-fn render(v: &serde_json::Value) -> VNode {
+fn render(v: &LightValue) -> VNode {
     if let Some(arr) = v.as_array() {
         if arr.is_empty() {
             return node("p", "dim", vec![t("(0件)")]);
         }
-        if arr.iter().all(|x| x.is_object()) {
-            let cols: Vec<String> = arr[0].as_object().map(|m| m.keys().cloned().collect()).unwrap_or_default();
+        if arr.iter().all(|x| x.as_object().is_some()) {
+            let cols: Vec<String> = arr[0].as_object().map(|m| m.iter().map(|(k, _)| k.clone()).collect()).unwrap_or_default();
             let mut rows = vec![node("tr", "", cols.iter().map(|c| node("th", "", vec![t(c.clone())])).collect())];
             for r in arr {
                 rows.push(node("tr", "", cols.iter().map(|c| node("td", "mono", vec![t(r.get(c).map(cell).unwrap_or_default())])).collect()));
@@ -175,7 +182,7 @@ fn render(v: &serde_json::Value) -> VNode {
         let mut kids = vec![];
         let mut cards = vec![];
         for (k, x) in m {
-            if x.is_object() || x.is_array() {
+            if x.as_object().is_some() || x.as_array().is_some() {
                 kids.push(node("h3", "", vec![t(k.clone())]));
                 kids.push(render(x));
             } else {
@@ -186,7 +193,7 @@ fn render(v: &serde_json::Value) -> VNode {
         all.extend(kids);
         return node("div", "", all);
     }
-    VNode::element("pre").child(t(v.to_string())).build()
+    VNode::element("pre").child(t(v.to_json())).build()
 }
 
 fn out(o: &Ops, op: &str) -> Vec<VNode> {

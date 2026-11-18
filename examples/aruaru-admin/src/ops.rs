@@ -3,7 +3,7 @@
 use crate::{node, t};
 use reaxt::hydrate::{on_click, on_input};
 use reaxt::react::{StateSetter, VNode};
-use reaxt_actions::{obj_json, quote_json, str_field, Action, Wire};
+use reaxt_actions::{quote_json, Action};
 use rust_json::LightValue;
 use std::collections::BTreeMap;
 
@@ -11,15 +11,8 @@ pub struct AdmIn {
     pub method: String,
     pub body: String,
 }
-/// 管理操作(Connect)の中継。トークンはサーバー側が付ける。
-impl Wire for AdmIn {
-    fn to_wire(&self) -> String {
-        obj_json(&[("method", quote_json(&self.method)), ("body", quote_json(&self.body))])
-    }
-    fn from_wire(v: &LightValue) -> Result<Self, String> {
-        Ok(AdmIn { method: str_field(v, "method")?, body: str_field(v, "body")? })
-    }
-}
+// 管理操作(Connect)の中継。トークンはサーバー側が付ける。
+reaxt_actions::wire_struct!(AdmIn { method: String, body: String });
 pub const ADM: Action<AdmIn, crate::GqlOut> = Action::new("aruaru_admin.v1.Proxy", "Admin");
 
 #[derive(Clone, Default)]

@@ -5,7 +5,7 @@
 //!
 //! 通信はConnect単純呼び出し(`POST /pkg.Service/Method`、本文JSON)のみで、RESTは作らない。
 use reaxt::backend::{Ctx, Denied, Module};
-use rust_json::{parse_light_secure, LightLimits, LightValue};
+use rust_json::{parse_light_secure, LightLimits};
 use std::marker::PhantomData;
 
 #[cfg(target_arch = "wasm32")]
@@ -155,6 +155,28 @@ pub fn obj_json(fields: &[(&str, String)]) -> String {
 }
 pub use rust_json::quote_json;
 
+/// 必須フィールドを任意の`Wire`型で取り出す(`wire_struct!`が使う)。
+pub fn field<T: Wire>(v: &LightValue, k: &str) -> Result<T, String> {
+    T::from_wire(v.get(k).ok_or_else(|| format!("フィールド {k} がありません"))?).map_err(|e| format!("{k}: {e}"))
+}
+
+/// 名前付きフィールドの構造体に`Wire`を実装する(各フィールドも`Wire`であること)。
+/// 例: `wire_struct!(Add { by: u32 });` → `{"by":3}` との相互変換。
+#[macro_export]
+macro_rules! wire_struct {
+    ($t:ident { $($f:ident : $ty:ty),* $(,)? }) => {
+        impl $crate::Wire for $t {
+            fn to_wire(&self) -> String {
+                $crate::obj_json(&[$((stringify!($f), $crate::Wire::to_wire(&self.$f))),*])
+            }
+            fn from_wire(v: &$crate::LightValue) -> Result<Self, String> {
+                Ok($t { $($f: $crate::field::<$ty>(v, stringify!($f))?),* })
+            }
+        }
+    };
+}
+pub use rust_json::LightValue;
+
 /// 型付きで呼び出す。`cb`は応答(または失敗)で1回だけ呼ばれる。
 pub fn call<I, O>(client: &dyn Client, a: &Action<I, O>, input: &I, cb: impl FnOnce(Result<O, ActionError>) + 'static)
 where
@@ -211,21 +233,25 @@ mod tests {
         total: u32,
     }
     const ADD: Action<Add, Total> = Action::new("demo.v1.Counter", "Add");
-    impl Wire for Add {
-        fn to_wire(&self) -> String {
-            obj_json(&[("by", self.by.to_string())])
-        }
-        fn from_wire(v: &LightValue) -> Result<Self, String> {
-            Ok(Add { by: int_field(v, "by")? as u32 })
-        }
+    crate::wire_struct!(Add { by: u32 });
+    crate::wire_struct!(Total { total: u32 });
+
+    #[derive(Debug, PartialEq)]
+    struct Mixed {
+        name: String,
+        on: bool,
+        ids: Vec<u8>,
     }
-    impl Wire for Total {
-        fn to_wire(&self) -> String {
-            obj_json(&[("total", self.total.to_string())])
-        }
-        fn from_wire(v: &LightValue) -> Result<Self, String> {
-            Ok(Total { total: int_field(v, "total")? as u32 })
-        }
+    crate::wire_struct!(Mixed { name: String, on: bool, ids: Vec<u8> });
+
+    #[test]
+    fn wire_struct_round_trips_and_rejects() {
+        let m = Mixed { name: "a\"b\n".into(), on: true, ids: vec![1, 2, 3] };
+        let json = m.to_wire();
+        assert_eq!(decode::<Mixed>(&json).unwrap(), m);
+        assert!(decode::<Mixed>("{\"name\":\"x\",\"on\":true}").unwrap_err().contains("ids"));
+        assert!(decode::<Add>("{\"by\":-1}").is_err());
+        assert!(decode::<Add>("{\"by\":1,\"by\":2}").is_err());
     }
 
     fn app() -> App {

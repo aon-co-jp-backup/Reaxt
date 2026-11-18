@@ -3,7 +3,7 @@
 //! JSONはRS-JSONの`light`(依存ゼロ、serde/serde_json無し)で読み書きする。
 use reaxt::hydrate::on_click;
 use reaxt::react::{use_state, StateSetter, VNode};
-use reaxt_actions::{bool_field, obj_json, quote_json, str_field, Action, Wire};
+use reaxt_actions::{quote_json, Action};
 use rust_json::LightValue;
 pub mod ops;
 use std::cell::RefCell;
@@ -11,25 +11,11 @@ use std::cell::RefCell;
 pub struct GqlIn {
     pub query: String,
 }
-impl Wire for GqlIn {
-    fn to_wire(&self) -> String {
-        obj_json(&[("query", quote_json(&self.query))])
-    }
-    fn from_wire(v: &LightValue) -> Result<Self, String> {
-        Ok(GqlIn { query: str_field(v, "query")? })
-    }
-}
+reaxt_actions::wire_struct!(GqlIn { query: String });
 pub struct GqlOut {
     pub body: String,
 }
-impl Wire for GqlOut {
-    fn to_wire(&self) -> String {
-        obj_json(&[("body", quote_json(&self.body))])
-    }
-    fn from_wire(v: &LightValue) -> Result<Self, String> {
-        Ok(GqlOut { body: str_field(v, "body")? })
-    }
-}
+reaxt_actions::wire_struct!(GqlOut { body: String });
 /// 画面→サーバー(BFF)→aruaru-server の GraphQL(問い合わせ専用)。
 pub const GQL: Action<GqlIn, GqlOut> = Action::new("aruaru_admin.v1.Proxy", "Graphql");
 
@@ -37,14 +23,7 @@ pub struct SqlIn {
     pub sql: String,
     pub auto_commit: bool,
 }
-impl Wire for SqlIn {
-    fn to_wire(&self) -> String {
-        obj_json(&[("sql", quote_json(&self.sql)), ("auto_commit", self.auto_commit.to_string())])
-    }
-    fn from_wire(v: &LightValue) -> Result<Self, String> {
-        Ok(SqlIn { sql: str_field(v, "sql")?, auto_commit: bool_field(v, "auto_commit")? })
-    }
-}
+reaxt_actions::wire_struct!(SqlIn { sql: String, auto_commit: bool });
 /// SQL実行(書き込み)。サーバー側で`execSql`のmutationを組み立てて中継する。
 pub const SQL: Action<SqlIn, GqlOut> = Action::new("aruaru_admin.v1.Proxy", "ExecSql");
 

@@ -338,6 +338,38 @@ pub fn use_context<T: Clone + 'static>() -> Option<T> {
     })
 }
 
+
+/// Reactの`useId`。コンポーネントとフック位置ごとに安定した一意の文字列(`label`の`for`などに使う)。
+pub fn use_id() -> String {
+    let id = current_id();
+    let i = slot::<()>(id, || ());
+    format!("rx-{id}-{i}")
+}
+
+/// Reactの`useLayoutEffect`。描画が同期でレイアウト待ちが無いため、`use_effect`と同じ(描画直後に実行)。
+pub fn use_layout_effect<D: PartialEq + Clone + 'static>(deps: D, f: impl FnOnce() -> Option<Cleanup> + 'static) {
+    use_effect(deps, f)
+}
+
+/// Reactの`useDeferredValue`。更新を遅らせる並行描画が無いため、値をそのまま返す。
+pub fn use_deferred_value<T>(v: T) -> T {
+    v
+}
+
+/// Reactの`useTransition`相当。並行描画が無いので `is_pending` は常に false、`start` は即実行する。
+pub fn use_transition() -> (bool, fn(&dyn Fn())) {
+    fn start(f: &dyn Fn()) {
+        f()
+    }
+    (false, start)
+}
+
+/// Reactの`memo`。`props`が前回と同じなら描画関数を呼ばず前回のVNodeを返す。
+pub fn memo<P: PartialEq + Clone + 'static>(props: P, render: impl FnOnce(&P) -> super::vnode::VNode) -> super::vnode::VNode {
+    let p = props.clone();
+    use_memo(props, move || render(&p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +569,42 @@ mod tests {
         assert_eq!(value_b, 100, "instance b must not see instance a's update");
         drop_instance(id_a);
         drop_instance(id_b);
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+    use crate::react::vnode::VNode;
+
+    #[test]
+    fn use_id_is_stable_and_unique_per_hook() {
+        let id = 30;
+        let a = run_component(id, || (use_id(), use_id()));
+        let b = run_component(id, || (use_id(), use_id()));
+        assert_eq!(a, b);
+        assert_ne!(a.0, a.1);
+        drop_instance(id);
+    }
+
+    #[test]
+    fn memo_skips_render_when_props_unchanged() {
+        let id = 31;
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let go = |p: i32| {
+            let c = calls.clone();
+            run_component(id, || {
+                memo(p, move |p| {
+                    c.set(c.get() + 1);
+                    VNode::text(format!("{p}"))
+                })
+            })
+        };
+        assert_eq!(go(1), VNode::text("1"));
+        assert_eq!(go(1), VNode::text("1"));
+        assert_eq!(calls.get(), 1);
+        assert_eq!(go(2), VNode::text("2"));
+        assert_eq!(calls.get(), 2);
+        drop_instance(id);
     }
 }

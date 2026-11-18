@@ -9,7 +9,9 @@ fn http_post(addr: &str, path: &str, body: &str) -> Result<String, String> {
     use std::time::Duration;
     let mut s = std::net::TcpStream::connect(addr).map_err(|e| format!("接続できません {addr}: {e}"))?;
     s.set_read_timeout(Some(Duration::from_secs(10))).ok();
-    let req = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    // 管理操作・管理用GraphQLにはサーバー側の環境変数のトークンを付ける(ブラウザへは出さない)
+    let tok = std::env::var("ARUARU_DB_ADMIN_TOKEN").map(|t| format!("x-admin-token: {t}\r\n")).unwrap_or_default();
+    let req = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n{tok}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
     s.read_to_end(&mut raw).map_err(|e| e.to_string())?;
@@ -52,6 +54,7 @@ fn main() {
     let read = |f: &str| std::fs::read(format!("{pkg}/{f}")).unwrap_or_else(|e| panic!("{pkg}/{f}: {e}"));
 
     let up2 = upstream.clone();
+    let up3 = upstream.clone();
     let app = App::new("aruaru-admin (Reaxt)")
         .head("<link rel=\"stylesheet\" href=\"/_reaxt/app.css\">")
         .global_guard(reaxt_actions::csrf_guard)
@@ -60,6 +63,13 @@ fn main() {
             let m = aruaru_admin_reaxt::exec_sql_mutation(&i.sql, i.auto_commit).map_err(|e| Denied::new(400, e))?;
             let q = rust_json::to_string_strict(&m).map_err(|e| Denied::new(500, e.to_string()))?;
             http_post(&up2, "/graphql", &format!("{{\"query\":{q}}}")).map(|body| GqlOut { body }).map_err(|e| Denied::new(502, e))
+        }).action(&aruaru_admin_reaxt::ops::ADM, move |_, i: aruaru_admin_reaxt::ops::AdmIn| {
+            // 管理操作は許可リストのメソッドだけ中継(トークンはサーバー側の環境変数)
+            const OK: &[&str] = &["CreateBackup", "RestoreBackup", "CrawlRegistry", "TestSourceConnection", "RunMigration", "RegisterFederatedSource", "DropFederatedSource", "FederatedQuery", "ExplainDistributed", "ClusterNodeOp", "RebalanceCluster"];
+            if !OK.contains(&i.method.as_str()) {
+                return Err(Denied::new(403, "許可されていないメソッド"));
+            }
+            http_post(&up3, &format!("/open_runo.aruaru.admin.v1.Admin/{}", i.method), &i.body).map(|body| GqlOut { body }).map_err(|e| Denied::new(502, e))
         }).action(&GQL, move |_, i: aruaru_admin_reaxt::GqlIn| {
             // 読み取り専用の中継: mutation は通さない(管理操作は別途Connectで)
             if i.query.trim_start().starts_with("mutation") {

@@ -14,6 +14,7 @@ reaxt = { path = "../.." }
 reaxt-actions = { path = "../../reaxt-actions" }
 rust-json = { path = "../../../RS-JSON" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.126"

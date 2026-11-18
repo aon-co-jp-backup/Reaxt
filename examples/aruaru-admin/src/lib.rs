@@ -3,6 +3,7 @@
 use reaxt::hydrate::on_click;
 use reaxt::react::{use_state, StateSetter, VNode};
 use reaxt_actions::Action;
+pub mod ops;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 
@@ -221,9 +222,15 @@ fn commit_table(commits: &[Commit]) -> VNode {
     node("table", "tbl", rows)
 }
 
-fn page_body(page: &str, s: &Snap, q: &QueryForm) -> VNode {
+fn page_body(page: &str, s: &Snap, q: &QueryForm, ops: &ops::Ops, set_ops: &StateSetter<ops::Ops>) -> VNode {
     match page {
         "query" => query_page(q),
+        "migrate" => ops::migrate(set_ops, ops),
+        "backup" => ops::backup(set_ops, ops),
+        "registry" => ops::registry(set_ops, ops),
+        "parallel" => ops::parallel(set_ops, ops),
+        "federation" => ops::federation(set_ops, ops),
+        "cluster" => ops::cluster(set_ops, ops),
         "commits" => node("section", "", vec![node("h2", "", vec![t("コミット履歴")]), commit_table(&s.commits)]),
         "branches" => {
             let mut rows = vec![node("tr", "", vec![node("th", "", vec![t("ブランチ")]), node("th", "", vec![t("HEAD")]), node("th", "", vec![t("")])])];
@@ -273,6 +280,7 @@ pub fn view() -> VNode {
     let (auto, set_auto) = use_state(|| false);
     let (out, set_out) = use_state(String::new);
     let q = QueryForm { mode, text, auto, out, set_mode, set_text, set_auto, set_out };
+    let (opsv, set_ops) = use_state(ops::Ops::default);
     let dot = match snap.online {
         Some(true) => "dot on",
         Some(false) => "dot off",
@@ -293,10 +301,17 @@ pub fn view() -> VNode {
             nav_button("commits", "コミット", page == "commits", set_page.clone()),
             nav_button("branches", "ブランチ", page == "branches", set_page.clone()),
             nav_button("query", "クエリ", page == "query", set_page.clone()),
+            node("div", "group", vec![t("管理")]),
+            nav_button("migrate", "お引越し", page == "migrate", set_page.clone()),
+            nav_button("backup", "バックアップ", page == "backup", set_page.clone()),
+            nav_button("registry", "レジストリ", page == "registry", set_page.clone()),
+            nav_button("parallel", "並列化", page == "parallel", set_page.clone()),
+            nav_button("federation", "統合", page == "federation", set_page.clone()),
+            nav_button("cluster", "クラスタ", page == "cluster", set_page.clone()),
             node("div", "status", vec![node("span", dot, vec![]), VNode::element("span").attr("id", "status").child(t(status)).build()]),
         ],
     );
-    node("div", "app", vec![side, node("main", "main", vec![page_body(&page, &snap, &q)])])
+    node("div", "app", vec![side, node("main", "main", vec![page_body(&page, &snap, &q, &opsv, &set_ops)])])
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -338,12 +353,13 @@ mod tests {
                 let (auto, set_auto) = use_state(|| false);
                 let (out, set_out) = use_state(|| "<i>out</i>".to_string());
                 let q = QueryForm { mode, text, auto, out, set_mode, set_text, set_auto, set_out };
-                reaxt::ssr::render(&page_body(p, &s, &q))
+                let (o, so) = use_state(ops::Ops::default);
+                reaxt::ssr::render(&page_body(p, &s, &q, &o, &so))
             });
             reaxt::react::hooks::drop_instance(1);
             h
         };
-        for p in ["dashboard", "commits", "branches", "query"] {
+        for p in ["dashboard", "commits", "branches", "query", "migrate", "backup", "registry", "parallel", "federation", "cluster"] {
             let html = html_of(p);
             assert!(!html.contains("<b>x") && !html.contains("<i>out"), "{p}: 値はエスケープされる");
         }

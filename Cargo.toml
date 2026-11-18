@@ -24,3 +24,11 @@ members = ["reaxt-rpoem", "reaxt-actions", "reaxt-cli", "examples/counter", "exa
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.126"
 web-sys = { version = "0.3", features = ["Window", "EventTarget", "Document", "HtmlElement", "Element", "Node", "NodeList", "Text", "Event", "HtmlInputElement", "HtmlTextAreaElement", "HtmlSelectElement", "EventTarget"] }
+
+# wasmを小さくする(サイズ優先・LTO・panic=abort)
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

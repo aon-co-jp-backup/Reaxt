@@ -35,7 +35,7 @@ ARUARU_DB_ADMIN_TOKEN=tk ARUARU_GQL=127.0.0.1:4100 cargo run -p aruaru-admin-rea
 ## 未了(優先順)
 1. SET への配備(Reaxt自体の配備先・手順)
 2. 描画速度・初回表示の実測(元との比較は転送量だけ済み)
-3. wasm縮小(`wasm-opt`、`opt-level="z"`、不要機能の削減)
+3. wasm縮小の続き(リリース設定は適用済み。`wasm-opt` は未導入、入れて再計測)
 4. `Wire` の derive マクロ(型ごとの手書きをなくす)
 5. 元の画面の再現不足(ウィザードの段階表示、スライダー、CPU棒グラフ、サンプル表示)
 6. RPoem のワイルドカードルート(現状 `*slug` は深さ8まで展開)

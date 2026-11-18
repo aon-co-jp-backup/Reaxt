@@ -21,7 +21,7 @@ cd my-app && reaxt dev                # ビルド+起動+変更の監視 http://
 - `reaxt-cli/` — `reaxt` コマンド
 - `examples/counter/` — SSR・Islands・Server Actionsのデモ
 - `examples/aruaru-admin/` — aruaru-admin Webの移植(全10画面、実aruaru-serverと実ブラウザで確認)。`ARUARU_GQL=host:port`で上流、`ARUARU_DB_ADMIN_TOKEN`でサーバー側中継のトークン(ブラウザには出ない)。管理操作は許可リスト11メソッドのみ中継。wasmはserde/serde_json不使用(RS-JSON `light` + `Wire`トレイト)
-- 実測(元のReact版比較): 元 JS 208KB(gzip 64KB)に対しReaxt版 wasm 366KB(gzip 113KB)で転送量は約1.8倍。利点は型の共有とJS/TSゼロ。手順は [PORTING.md](PORTING.md)
+- 実測(元のReact版比較): 元 JS 208KB(gzip 64KB)に対しReaxt版 wasm 202KB(gzip 84KB、リリース設定で縮小。当初366KB)で転送量は約1.3倍。利点は型の共有とJS/TSゼロ。手順は [PORTING.md](PORTING.md)
 
 ```bash
 cargo test --workspace

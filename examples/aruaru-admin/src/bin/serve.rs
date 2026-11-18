@@ -51,10 +51,16 @@ fn main() {
     let upstream = std::env::var("ARUARU_GQL").unwrap_or_else(|_| "127.0.0.1:4100".into());
     let read = |f: &str| std::fs::read(format!("{pkg}/{f}")).unwrap_or_else(|e| panic!("{pkg}/{f}: {e}"));
 
+    let up2 = upstream.clone();
     let app = App::new("aruaru-admin (Reaxt)")
         .head("<link rel=\"stylesheet\" href=\"/_reaxt/app.css\">")
         .global_guard(reaxt_actions::csrf_guard)
-        .module(reaxt::backend::Module::new().action(&GQL, move |_, i: aruaru_admin_reaxt::GqlIn| {
+        .module(reaxt::backend::Module::new().action(&aruaru_admin_reaxt::SQL, move |_, i: aruaru_admin_reaxt::SqlIn| {
+            // 書き込みはこの専用口だけ(トークンなどはサーバー側に置き、ブラウザへは出さない)
+            let m = aruaru_admin_reaxt::exec_sql_mutation(&i.sql, i.auto_commit).map_err(|e| Denied::new(400, e))?;
+            let q = rust_json::to_string_strict(&m).map_err(|e| Denied::new(500, e.to_string()))?;
+            http_post(&up2, "/graphql", &format!("{{\"query\":{q}}}")).map(|body| GqlOut { body }).map_err(|e| Denied::new(502, e))
+        }).action(&GQL, move |_, i: aruaru_admin_reaxt::GqlIn| {
             // 読み取り専用の中継: mutation は通さない(管理操作は別途Connectで)
             if i.query.trim_start().starts_with("mutation") {
                 return Err(Denied::new(403, "mutation は中継しません"));

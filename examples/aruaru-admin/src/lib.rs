@@ -17,6 +17,20 @@ pub struct GqlOut {
 /// 画面→サーバー(BFF)→aruaru-server の GraphQL(問い合わせ専用)。
 pub const GQL: Action<GqlIn, GqlOut> = Action::new("aruaru_admin.v1.Proxy", "Graphql");
 
+#[derive(Serialize, Deserialize)]
+pub struct SqlIn {
+    pub sql: String,
+    pub auto_commit: bool,
+}
+/// SQL実行(書き込み)。サーバー側で`execSql`のmutationを組み立てて中継する。
+pub const SQL: Action<SqlIn, GqlOut> = Action::new("aruaru_admin.v1.Proxy", "ExecSql");
+
+/// `execSql` の GraphQL mutation を作る(SQL文字列はJSON文字列と同じ規則でエスケープ)。
+pub fn exec_sql_mutation(sql: &str, auto_commit: bool) -> Result<String, String> {
+    let s = rust_json::to_string_strict(&sql).map_err(|e| e.to_string())?;
+    Ok(format!("mutation {{ execSql(sql: {s}, autoCommit: {auto_commit}, commitMessage: \"aruaru-admin\") {{ success commitId message }} }}"))
+}
+
 pub const QUERY: &str = "query { currentBranch branches { name headCommitId isCurrent } log(limit: 50) { shortId author message timestamp } }";
 
 #[derive(Deserialize, Clone, Default, Debug)]
@@ -100,6 +114,71 @@ pub fn refresh() {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn refresh() {}
 
+/// クエリ画面の実行。応答(または失敗)を`set_out`へ。
+#[cfg(target_arch = "wasm32")]
+fn run_query(mode: &str, text: String, auto: bool, set_out: StateSetter<String>) {
+    use reaxt_actions::web::WebClient;
+    set_out.set("実行中…".into());
+    let done = move |r: Result<GqlOut, reaxt_actions::ActionError>| {
+        set_out.set(match r {
+            Ok(o) => o.body,
+            Err(reaxt_actions::ActionError::Server { message, .. }) => format!("エラー: {message}"),
+            Err(e) => format!("{e:?}"),
+        })
+    };
+    if mode == "sql" {
+        reaxt_actions::call(&WebClient, &SQL, &SqlIn { sql: text, auto_commit: auto }, done);
+    } else {
+        reaxt_actions::call(&WebClient, &GQL, &GqlIn { query: text }, done);
+    }
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn run_query(_: &str, _: String, _: bool, _: StateSetter<String>) {}
+
+struct QueryForm {
+    mode: String,
+    text: String,
+    auto: bool,
+    out: String,
+    set_mode: StateSetter<String>,
+    set_text: StateSetter<String>,
+    set_auto: StateSetter<bool>,
+    set_out: StateSetter<String>,
+}
+
+fn query_page(f: &QueryForm) -> VNode {
+    use reaxt::hydrate::{on_input, on_submit};
+    let mode_btn = |m: &'static str, label: &str| {
+        let set = f.set_mode.clone();
+        let (k, v) = on_click(&format!("mode-{m}"), move || set.set(m.to_string()));
+        VNode::element("button").attr("type", "button").attr("id", format!("mode-{m}")).attr("class", if f.mode == m { "tab active" } else { "tab" }).attr(k, v).child(t(label)).build()
+    };
+    let set_text = f.set_text.clone();
+    let (ik, iv) = on_input("q-text", move |v| set_text.set(v));
+    let set_auto = f.set_auto.clone();
+    let (ak, av) = on_input("q-auto", move |v| set_auto.set(v == "true"));
+    let (mode, text, auto, set_out) = (f.mode.clone(), f.text.clone(), f.auto, f.set_out.clone());
+    let (sk, sv) = on_submit("q-run", move || run_query(&mode, text.clone(), auto, set_out.clone()));
+    let placeholder = if f.mode == "sql" { "INSERT INTO ... / CREATE TABLE ..." } else { "query { branches { name } }" };
+    let mut row = vec![mode_btn("sql", "SQL"), mode_btn("graphql", "GraphQL")];
+    if f.mode == "sql" {
+        row.push(node(
+            "label",
+            "chk",
+            vec![VNode::element("input").attr("type", "checkbox").attr("id", "q-auto").attr(ak, av).build(), t("自動コミット")],
+        ));
+    }
+    let mut form = VNode::element("form").attr("class", "qform").attr(sk, sv);
+    form = form.child(node("div", "row", row));
+    form = form.child(VNode::element("textarea").attr("id", "q-text").attr("rows", "8").attr("spellcheck", "false").attr("placeholder", placeholder).attr(ik, iv).build());
+    form = form.child(VNode::element("button").attr("type", "submit").attr("id", "q-run").attr("class", "run").child(t("実行")).build());
+    let mut kids = vec![node("h2", "", vec![t("クエリ")]), form.build()];
+    if !f.out.is_empty() {
+        kids.push(VNode::element("pre").attr("id", "q-out").child(t(f.out.clone())).build());
+    }
+    node("section", "", kids)
+}
+
 fn node(tag: &str, class: &str, kids: Vec<VNode>) -> VNode {
     let mut b = VNode::element(tag);
     if !class.is_empty() {
@@ -142,8 +221,9 @@ fn commit_table(commits: &[Commit]) -> VNode {
     node("table", "tbl", rows)
 }
 
-fn page_body(page: &str, s: &Snap) -> VNode {
+fn page_body(page: &str, s: &Snap, q: &QueryForm) -> VNode {
     match page {
+        "query" => query_page(q),
         "commits" => node("section", "", vec![node("h2", "", vec![t("コミット履歴")]), commit_table(&s.commits)]),
         "branches" => {
             let mut rows = vec![node("tr", "", vec![node("th", "", vec![t("ブランチ")]), node("th", "", vec![t("HEAD")]), node("th", "", vec![t("")])])];
@@ -187,6 +267,12 @@ pub fn view() -> VNode {
     let (page, set_page) = use_state(|| "dashboard".to_string());
     let (snap, set_snap) = use_state(Snap::default);
     SETTER.with(|c| *c.borrow_mut() = Some(set_snap));
+    // フックの数と順序を変えないよう、クエリ画面の状態も常に作る
+    let (mode, set_mode) = use_state(|| "sql".to_string());
+    let (text, set_text) = use_state(String::new);
+    let (auto, set_auto) = use_state(|| false);
+    let (out, set_out) = use_state(String::new);
+    let q = QueryForm { mode, text, auto, out, set_mode, set_text, set_auto, set_out };
     let dot = match snap.online {
         Some(true) => "dot on",
         Some(false) => "dot off",
@@ -206,10 +292,11 @@ pub fn view() -> VNode {
             nav_button("dashboard", "ダッシュボード", page == "dashboard", set_page.clone()),
             nav_button("commits", "コミット", page == "commits", set_page.clone()),
             nav_button("branches", "ブランチ", page == "branches", set_page.clone()),
+            nav_button("query", "クエリ", page == "query", set_page.clone()),
             node("div", "status", vec![node("span", dot, vec![]), VNode::element("span").attr("id", "status").child(t(status)).build()]),
         ],
     );
-    node("div", "app", vec![side, node("main", "main", vec![page_body(&page, &snap)])])
+    node("div", "app", vec![side, node("main", "main", vec![page_body(&page, &snap, &q)])])
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -243,9 +330,31 @@ mod tests {
     #[test]
     fn renders_pages_to_html() {
         let s = parse_snap(r#"{"data":{"currentBranch":"main","branches":[],"log":[{"shortId":"1","author":"a","message":"<b>x</b>","timestamp":"t"}]}}"#).unwrap();
-        for p in ["dashboard", "commits", "branches"] {
-            let html = reaxt::ssr::render(&page_body(p, &s));
-            assert!(!html.contains("<b>x"), "{p}: メッセージはエスケープされる");
+        let html_of = |p: &'static str| {
+            let s = s.clone();
+            let h = reaxt::react::hooks::run_component(1, move || {
+                let (mode, set_mode) = use_state(|| "sql".to_string());
+                let (text, set_text) = use_state(String::new);
+                let (auto, set_auto) = use_state(|| false);
+                let (out, set_out) = use_state(|| "<i>out</i>".to_string());
+                let q = QueryForm { mode, text, auto, out, set_mode, set_text, set_auto, set_out };
+                reaxt::ssr::render(&page_body(p, &s, &q))
+            });
+            reaxt::react::hooks::drop_instance(1);
+            h
+        };
+        for p in ["dashboard", "commits", "branches", "query"] {
+            let html = html_of(p);
+            assert!(!html.contains("<b>x") && !html.contains("<i>out"), "{p}: 値はエスケープされる");
         }
+        let q = html_of("query");
+        assert!(q.contains("data-rx-submit=\"q-run\"") && q.contains("data-rx-input=\"q-text\"") && q.contains("data-rx-input=\"q-auto\""));
+        assert!(!q.contains("onsubmit") && !q.contains("oninput"), "インラインJSは使わない");
+    }
+
+    #[test]
+    fn exec_sql_mutation_escapes_the_sql() {
+        let m = exec_sql_mutation("INSERT INTO t VALUES ('a\"b')\n", true).unwrap();
+        assert!(m.starts_with("mutation { execSql(sql: \"INSERT INTO t VALUES ('a\\\"b')\\n\", autoCommit: true"), "{m}");
     }
 }

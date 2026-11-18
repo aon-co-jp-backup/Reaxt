@@ -157,6 +157,79 @@ pub fn on_click(id: &str, f: impl Fn() + 'static) -> (&'static str, String) {
     (CLICK_ATTR, key)
 }
 
+// ---- フォーム: input(値つき)・submit ----
+
+pub const INPUT_ATTR: &str = "data-rx-input";
+pub const SUBMIT_ATTR: &str = "data-rx-submit";
+
+thread_local! {
+    static INPUTS: RefCell<HashMap<String, Rc<dyn Fn(String)>>> = RefCell::new(HashMap::new());
+    static SUBMITS: RefCell<HashMap<String, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
+}
+
+fn scoped_key(id: &str) -> String {
+    let scope = SCOPE.with(|s| s.get());
+    if scope == 0 { id.to_string() } else { format!("{scope}:{id}") }
+}
+
+/// `<input>`/`<textarea>`/`<select>`の値が変わるたびに`f(新しい値)`を呼ぶ。属性(名前, 値)を返す。
+pub fn on_input(id: &str, f: impl Fn(String) + 'static) -> (&'static str, String) {
+    let key = scoped_key(id);
+    INPUTS.with(|c| c.borrow_mut().insert(key.clone(), Rc::new(f)));
+    (INPUT_ATTR, key)
+}
+
+/// `<form>`の送信で`f`を呼ぶ(ブラウザ既定の送信・ページ遷移は止める)。
+pub fn on_submit(id: &str, f: impl Fn() + 'static) -> (&'static str, String) {
+    let key = scoped_key(id);
+    SUBMITS.with(|c| c.borrow_mut().insert(key.clone(), Rc::new(f)));
+    (SUBMIT_ATTR, key)
+}
+
+pub fn dispatch_input(id: &str, value: &str) -> bool {
+    match INPUTS.with(|c| c.borrow().get(id).cloned()) {
+        Some(f) => {
+            f(value.to_string());
+            true
+        }
+        None => false,
+    }
+}
+
+pub fn dispatch_submit(id: &str) -> bool {
+    match SUBMITS.with(|c| c.borrow().get(id).cloned()) {
+        Some(f) => {
+            f();
+            true
+        }
+        None => false,
+    }
+}
+
+fn walk_attr<D: Dom>(d: &D, target: &D::Node, attr: &str, parent_of: impl Fn(&D::Node) -> Option<D::Node>, root_is: impl Fn(&D::Node) -> bool) -> Option<String> {
+    let mut cur = Some(target.clone());
+    while let Some(n) = cur {
+        if let Some(id) = d.attr(&n, attr) {
+            return Some(id);
+        }
+        if root_is(&n) {
+            break;
+        }
+        cur = parent_of(&n);
+    }
+    None
+}
+
+/// 要素から祖先へ辿って`data-rx-input`を探し、見つかれば`value`を渡して実行する。
+pub fn input_at<D: Dom>(d: &D, target: &D::Node, value: &str, parent_of: impl Fn(&D::Node) -> Option<D::Node>, root_is: impl Fn(&D::Node) -> bool) -> bool {
+    walk_attr(d, target, INPUT_ATTR, parent_of, root_is).is_some_and(|id| dispatch_input(&id, value))
+}
+
+/// 要素から祖先へ辿って`data-rx-submit`を探し、見つかれば実行する。
+pub fn submit_at<D: Dom>(d: &D, target: &D::Node, parent_of: impl Fn(&D::Node) -> Option<D::Node>, root_is: impl Fn(&D::Node) -> bool) -> bool {
+    walk_attr(d, target, SUBMIT_ATTR, parent_of, root_is).is_some_and(|id| dispatch_submit(&id))
+}
+
 // ---- 再描画の要求(非同期の応答などクリック以外の更新用) ----
 
 thread_local! {

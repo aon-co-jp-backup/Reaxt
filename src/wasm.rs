@@ -133,6 +133,50 @@ pub fn flush_all() {
     crate::react::hooks::clear_all_dirty();
 }
 
+/// 入力要素の現在の値(input/textarea/select)。
+fn value_of(n: &Node) -> Option<String> {
+    if let Some(e) = n.dyn_ref::<web_sys::HtmlInputElement>() {
+        return Some(if e.type_() == "checkbox" { e.checked().to_string() } else { e.value() });
+    }
+    if let Some(e) = n.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+        return Some(e.value());
+    }
+    n.dyn_ref::<web_sys::HtmlSelectElement>().map(|e| e.value())
+}
+
+/// ルート要素にイベント委譲のリスナー(click・input・change・submit)を付ける。
+fn listen(dom: &Rc<WebDom>, root: Node) -> Result<(), JsValue> {
+    for name in ["click", "input", "change", "submit"] {
+        let (dom2, rn) = (dom.clone(), root.clone());
+        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
+            let Some(target) = ev.target().and_then(|t| t.dyn_into::<Node>().ok()) else { return };
+            let parent = |n: &Node| n.parent_node();
+            let is_root = |n: &Node| n.is_same_node(Some(&rn));
+            let hit = match ev.type_().as_str() {
+                "click" => click_at(&*dom2, &target, parent, is_root),
+                "submit" => {
+                    let h = crate::hydrate::submit_at(&*dom2, &target, parent, is_root);
+                    if h {
+                        ev.prevent_default();
+                    }
+                    h
+                }
+                // input と change のどちらでも値を渡す(selectやcheckboxはchangeだけのことがある)
+                _ => match value_of(&target) {
+                    Some(v) => crate::hydrate::input_at(&*dom2, &target, &v, parent, is_root),
+                    None => false,
+                },
+            };
+            if hit {
+                flush_all();
+            }
+        });
+        root.add_event_listener_with_callback(name, cb.as_ref().unchecked_ref())?;
+        cb.forget();
+    }
+    Ok(())
+}
+
 /// `selector`(例 `#reaxt-root`)の要素へアプリをマウントする。
 /// 中身がSSR出力と一致すればそのまま採用(ハイドレーション)、空/不一致なら描画し直す。
 /// 戻り値は採用できたか。
@@ -145,21 +189,8 @@ pub fn mount(selector: &str, id: ComponentId, render: impl Fn() -> VNode + 'stat
     let rt = Rc::new(RefCell::new(Runtime::mount(dom.clone(), root.clone().into(), id, render)));
     let adopted = rt.borrow().adopted;
 
-    // イベント委譲: ルートに1つだけクリックリスナーを付ける
-    let rt2 = rt.clone();
-    let dom2 = dom.clone();
-    let root_node: Node = root.clone().into();
-    let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
-        let Some(target) = ev.target().and_then(|t| t.dyn_into::<Node>().ok()) else { return };
-        let rn = root_node.clone();
-        let hit = click_at(&*dom2, &target, |n| n.parent_node(), |n| n.is_same_node(Some(&rn)));
-        if hit {
-            flush_all();
-        }
-    });
-    let _ = &rt2;
-    root.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
-    cb.forget();
+    // イベント委譲: ルートに click/input/submit のリスナーを1つずつ付ける
+    listen(&dom, root.clone().into())?;
 
     root.set_attribute("data-reaxt-hydrated", if adopted { "adopted" } else { "rebuilt" })?;
     register(rt);
@@ -178,17 +209,7 @@ pub fn mount_islands(registry: &[(&str, fn(&str) -> VNode)]) -> Result<usize, Js
     for rt in rts {
         let root_node = rt.root_node();
         let rt = Rc::new(RefCell::new(rt));
-        let (rt2, dom2, rn) = (rt.clone(), dom.clone(), root_node.clone());
-        let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |ev: web_sys::Event| {
-            let Some(target) = ev.target().and_then(|t| t.dyn_into::<Node>().ok()) else { return };
-            let hit = click_at(&*dom2, &target, |n| n.parent_node(), |n| n.is_same_node(Some(&rn)));
-            if hit {
-                flush_all();
-            }
-        });
-        let _ = &rt2;
-        root_node.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
-        cb.forget();
+        listen(&dom, root_node.clone())?;
         if let Some(el) = root_node.dyn_ref::<Element>() {
             el.set_attribute("data-reaxt-hydrated", if rt.borrow().adopted { "adopted" } else { "rebuilt" })?;
         }

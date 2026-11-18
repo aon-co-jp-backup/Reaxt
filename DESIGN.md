@@ -35,3 +35,10 @@ JSON は RS-JSON(`from_str_secure`)。
 現時点は核のみ。RS-React の README は「コンポーネントモデル未着手」とあるが、
 実際は hooks.rs/app.rs が既にある(README が古い)。Rust 版 React の利点は
 実測前なので断定しない(段階5で判断)。
+
+## 実装状況の追記(2026-11-18)
+- Nest相当: `backend.rs` — DIコンテナ(型キー)・ガード(モジュール/全体)・Module・Connect単純呼び出し(`POST /pkg.Service/Method`、本文上限1MiB、エラーはConnectのコード名のJSON)。
+- Nuxt相当: `App::route_rule(接頭辞, RouteRule)` — 描画方式の上書き・任意ヘッダ・cache-control。
+- Next相当: `pages/`規約・SSR。React相当: `src/react/`(旧RS-React)。
+- RPoem上で GET(ページ)/POST(Connect)とも実サーバーで確認済み(28+3テスト)。
+- 未実装: WASMハイドレーション(段階2)、Islands、Server Actionsの自動生成、`*slug`のRPoem側ワイルドカード。

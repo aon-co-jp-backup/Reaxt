@@ -19,25 +19,52 @@ fn handle(app: &App, mut conn: TcpStream) -> std::io::Result<()> {
     let mut line = String::new();
     rd.by_ref().take(8192).read_line(&mut line)?;
     let mut it = line.split_whitespace();
-    let (method, target) = (it.next().unwrap_or(""), it.next().unwrap_or("/"));
-    let (status, body) = if method != "GET" && method != "HEAD" {
-        (405, String::from("method not allowed"))
+    let (method, target) = (it.next().unwrap_or("").to_string(), it.next().unwrap_or("/").to_string());
+    let mut headers: Vec<(String, String)> = Vec::new();
+    loop {
+        let mut h = String::new();
+        if rd.by_ref().take(8192).read_line(&mut h)? == 0 || h.trim().is_empty() || headers.len() > 64 {
+            break;
+        }
+        if let Some((k, v)) = h.split_once(':') {
+            headers.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    let len: usize = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(0);
+    let r = if len > crate::backend::MAX_BODY {
+        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], body: "too large".into() }
     } else {
-        let r = app.handle(target);
-        (r.status, r.body)
+        let mut buf = vec![0u8; len];
+        rd.read_exact(&mut buf)?;
+        let body = String::from_utf8_lossy(&buf).into_owned();
+        app.dispatch(&crate::app::Request { method: &method, path: &target, headers: &headers, body: &body })
     };
-    let reason = match status {
+    let reason = match r.status {
         200 => "OK",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        413 => "Payload Too Large",
         _ => "Error",
     };
-    write!(
-        conn,
-        "HTTP/1.1 {status} {reason}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nx-content-type-options: nosniff\r\nconnection: close\r\n\r\n{}",
-        body.len(),
-        if method == "HEAD" { "" } else { &body }
-    )
+    let mut head = format!(
+        "HTTP/1.1 {} {reason}\r\ncontent-type: {}\r\ncontent-length: {}\r\nx-content-type-options: nosniff\r\nconnection: close\r\n",
+        r.status,
+        r.content_type,
+        r.body.len()
+    );
+    for (k, v) in &r.headers {
+        if !k.contains(['\r', '\n']) && !v.contains(['\r', '\n']) {
+            head.push_str(&format!("{k}: {v}\r\n"));
+        }
+    }
+    write!(conn, "{head}\r\n{}", if method == "HEAD" { "" } else { &r.body })
 }
 
 #[cfg(test)]

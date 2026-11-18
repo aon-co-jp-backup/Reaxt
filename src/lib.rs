@@ -3,6 +3,7 @@
 
 pub mod react;
 pub mod app;
+pub mod backend;
 pub mod server;
 pub mod ssr;
 

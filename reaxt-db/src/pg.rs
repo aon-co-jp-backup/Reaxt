@@ -1,6 +1,6 @@
 //! PostgreSQLワイヤ(v3・簡易問い合わせ)のクライアント。標準ライブラリだけで動く(TLSなし)。
 //! PostgreSQL・CockroachDB・YugabyteDB・aruaru-db(pgwire)など、PostgreSQL互換のデータベースに使える。
-//! 認証: trust / 平文 / MD5 / SCRAM-SHA-256。呼び出しごとに接続する(接続プールは未実装)。
+//! 認証: trust / 平文 / MD5 / SCRAM-SHA-256。接続は使い回す(待機接続を最大4本プール。古い接続は1回だけ作り直す)。
 //! TLSが必要な接続先(クラウドの多く)はTLS終端のプロキシ経由にする。
 use crate::{Db, DbError, Dialect, Rows};
 use std::io::{Read, Write};
@@ -14,11 +14,23 @@ pub struct PgDb {
     pub database: String,
     /// aruaru-db(バージョン管理DB)なら true: `execute_committed`で`aruaru_commit`を積む。他のDBでは false のまま。
     pub aruaru: bool,
+    /// 使い終わった接続を再利用する入れ物(最大`max_idle`本)。
+    pool: std::sync::Mutex<Vec<Conn>>,
+    pub max_idle: usize,
 }
 
 impl PgDb {
     pub fn new(addr: impl Into<String>, user: impl Into<String>, password: Option<String>, database: impl Into<String>) -> Self {
-        PgDb { addr: addr.into(), user: user.into(), password, database: database.into(), aruaru: false }
+        PgDb { addr: addr.into(), user: user.into(), password, database: database.into(), aruaru: false, pool: std::sync::Mutex::new(Vec::new()), max_idle: 4 }
+    }
+    /// 再利用する待機接続の最大数(0なら毎回接続し直す)。
+    pub fn max_idle(mut self, n: usize) -> Self {
+        self.max_idle = n;
+        self
+    }
+    /// 現在プールにある待機接続の数(試験・監視用)。
+    pub fn idle_connections(&self) -> usize {
+        self.pool.lock().unwrap_or_else(|x| x.into_inner()).len()
     }
     /// aruaru-db として扱う(コミット操作を有効にする)。
     pub fn aruaru(mut self) -> Self {
@@ -138,13 +150,16 @@ impl PgDb {
         }
     }
 
-    fn run(&self, sql: &str) -> Result<Rows, DbError> {
-        let mut c = self.connect()?;
-        c.send(Some(b'Q'), format!("{sql}\0").as_bytes())?;
+    /// 接続1本で1つ実行する。外側のErrは通信失敗(bool=何か受信済みか)、内側のErrはSQLの失敗(接続は再利用できる)。
+    fn run_on(&self, c: &mut Conn, sql: &str) -> Result<Result<Rows, String>, (DbError, bool)> {
+        let mut any = false;
+        c.send(Some(b'Q'), format!("{sql}\0").as_bytes()).map_err(|x| (x, false))?;
         let mut out = Rows::default();
         let mut failure: Option<String> = None;
         loop {
-            let (t, b) = c.recv()?;
+            let (t, b) = c.recv().map_err(|x| (x, any))?;
+            any = true;
+            let short = || (DbError("行が短い".into()), true);
             match t {
                 b'T' => {
                     let n = u16::from_be_bytes([b[0], b[1]]) as usize;
@@ -160,13 +175,13 @@ impl PgDb {
                     let mut r = &b[2..];
                     let mut row = Vec::with_capacity(n);
                     for _ in 0..n {
-                        let l = i32::from_be_bytes(r[..4].try_into().map_err(|_| DbError("行が短い".into()))?);
+                        let l = i32::from_be_bytes(r.get(..4).ok_or_else(short)?.try_into().map_err(|_| short())?);
                         r = &r[4..];
                         if l < 0 {
                             row.push(String::new());
                         } else {
                             let l = l as usize;
-                            row.push(String::from_utf8_lossy(r.get(..l).ok_or_else(|| DbError("行が短い".into()))?).into_owned());
+                            row.push(String::from_utf8_lossy(r.get(..l).ok_or_else(short)?).into_owned());
                             r = &r[l..];
                         }
                     }
@@ -177,10 +192,40 @@ impl PgDb {
                 _ => {}
             }
         }
-        let _ = c.send(Some(b'X'), &[]);
-        match failure {
-            Some(m) => e(m),
+        Ok(match failure {
+            Some(m) => Err(m),
             None => Ok(out),
+        })
+    }
+
+    fn give_back(&self, c: Conn) {
+        let mut p = self.pool.lock().unwrap_or_else(|x| x.into_inner());
+        if p.len() < self.max_idle {
+            p.push(c);
+        }
+    }
+
+    /// プールの接続があれば再利用する。古くなった接続(最初の応答の前に切れた)は捨てて1回だけ作り直す。
+    /// 応答の途中で切れた場合は再試行しない(書き込みの二重実行を避ける)。
+    fn run(&self, sql: &str) -> Result<Rows, DbError> {
+        let idle = self.pool.lock().unwrap_or_else(|x| x.into_inner()).pop();
+        if let Some(mut c) = idle {
+            match self.run_on(&mut c, sql) {
+                Ok(r) => {
+                    self.give_back(c);
+                    return r.map_err(DbError);
+                }
+                Err((_, false)) => {} // 古い接続: 作り直して再試行
+                Err((x, true)) => return Err(x),
+            }
+        }
+        let mut c = self.connect()?;
+        match self.run_on(&mut c, sql) {
+            Ok(r) => {
+                self.give_back(c);
+                r.map_err(DbError)
+            }
+            Err((x, _)) => Err(x),
         }
     }
 }

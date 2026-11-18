@@ -51,7 +51,7 @@ ARUARU_DB_ADMIN_TOKEN=tk ARUARU_GQL=127.0.0.1:4100 cargo run -p aruaru-admin-rea
 
 ## 2026-11-19 追記: 連携の追加と未了
 追加: JS/TSクライアント・jQueryプラグイン・Cosmo向けGraphQLサブグラフ・`reaxt-db`(詳細はREADME末尾と CLAUDE.md)。
-未了(優先順): (1) 実Cosmo Router で `wgc` による合成と実行を確認する(今はcurlまで)、(2) 実PostgreSQL/CockroachDBへの接続確認とTLS対応、(3) MySQL・Oracle・SQL Server・Snowflake のドライバ(今は束縛の方言のみ。MySQLのワイヤは `caching_sha2_password` にTLSかRSAが要る、Snowflakeは独自のHTTPS API、Oracleは独自のTNSで難所)、(4) 接続プール、(5) サブグラフの引数リテラル対応・Federationの`@key`エンティティ、(6) `pkg/` の再ビルド(`wire_struct!`反映)。
+未了(優先順): (1) 実Cosmo Router で `wgc` による合成と実行を確認する(今はcurlまで)、(2) 実PostgreSQL/CockroachDBへの接続確認とTLS対応、(3) MySQL・Oracle・SQL Server・Snowflake のドライバ(今は束縛の方言のみ。MySQLのワイヤは `caching_sha2_password` にTLSかRSAが要る、Snowflakeは独自のHTTPS API、Oracleは独自のTNSで難所)、(4) (済)接続プール(PgDbのみ。他DBは未実装)、(5) サブグラフの引数リテラル対応・Federationの`@key`エンティティ、(6) `pkg/` の再ビルド(`wire_struct!`反映)。
 
 
 ---

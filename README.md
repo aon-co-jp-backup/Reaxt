@@ -16,7 +16,7 @@ cd my-app && reaxt dev                # ビルド+起動+変更の監視 http://
 ## 構成
 
 - `src/` — ルート規約・SSR・ハイドレーション・Islands・バックエンド層(DI/ガード/Connect)・`react/`(仮想DOM・hooks)
-- `reaxt-rpoem/` — RPoem上で配信するアダプタ
+- `reaxt-rpoem/` — RPoem上で配信するアダプタ。`route(app)`はページ・静的アセット・Connect・外部連携の入口(Cosmoサブグラフ等)・`/_reaxt/manifest.json`を登録、`route_production(app)`はそれにRPoemのトレースと圧縮を重ねた本番向け既定(CORSは必要なら`.with_cors()`)
 - `reaxt-actions/` — Server Actions(型付きConnect呼び出し、JSONはRS-JSON)
 - `reaxt-cli/` — `reaxt` コマンド
 - `examples/counter/` — SSR・Islands・Server Actionsのデモ

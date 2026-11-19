@@ -35,6 +35,14 @@ pub trait ModuleActions: Sized {
         I: Wire + 'static,
         O: Wire + 'static,
         F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static;
+
+    /// `action` に加えて、出力 `O`(`wire_struct!` の構造体)を `@key` のエンティティとしてCosmoのサブグラフに公開する。
+    /// 入力 `I`(`wire_struct!`)のフィールドが鍵。ゲートウェイの `_entities` 呼び出しで、この関数が1件ずつ解決する。
+    fn entity<I, O, F>(self, a: &Action<I, O>, f: F) -> Self
+    where
+        I: Wire + 'static,
+        O: Wire + 'static,
+        F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static;
 }
 
 impl ModuleActions for Module {
@@ -44,11 +52,22 @@ impl ModuleActions for Module {
         O: Wire + 'static,
         F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static,
     {
+        subgraph::register_output(&a.path(), O::gql_type());
         self.method(a.service, a.method, move |ctx, body| {
             let input = decode::<I>(body).map_err(|e| Denied::new(400, e))?;
             let out = f(ctx, input)?;
             Ok(out.to_wire())
         })
+    }
+
+    fn entity<I, O, F>(self, a: &Action<I, O>, f: F) -> Self
+    where
+        I: Wire + 'static,
+        O: Wire + 'static,
+        F: Fn(&Ctx, I) -> Result<O, Denied> + Send + Sync + 'static,
+    {
+        subgraph::register_entity(&a.path(), I::gql_type(), O::gql_type());
+        self.action(a, f)
     }
 }
 
@@ -85,6 +104,24 @@ pub trait Client {
 pub trait Wire: Sized {
     fn to_wire(&self) -> String;
     fn from_wire(v: &LightValue) -> Result<Self, String>;
+    /// この型のGraphQL上の形(Cosmoのサブグラフが、結果を `JSON` ではなく型付きで見せるのに使う)。
+    /// 既定は `Json`(構造を持たない)。`wire_struct!` は `Object` を返す。
+    fn gql_type() -> GqlType {
+        GqlType::Json
+    }
+}
+
+/// `Wire` 型のGraphQL上の形。
+#[derive(Clone, Debug, PartialEq)]
+pub enum GqlType {
+    /// 構造を持たない(GraphQLの `JSON` スカラー)。
+    Json,
+    Int,
+    Boolean,
+    Str,
+    List(Box<GqlType>),
+    /// 名前付きフィールドの構造体(`wire_struct!`)。
+    Object { name: &'static str, fields: Vec<(&'static str, GqlType)> },
 }
 
 impl Wire for () {
@@ -102,6 +139,9 @@ macro_rules! wire_int {
             fn from_wire(v: &LightValue) -> Result<Self, String> {
                 v.as_i64().and_then(|n| <$t>::try_from(n).ok()).ok_or_else(|| "整数が必要です(範囲外かも)".to_string())
             }
+            fn gql_type() -> $crate::GqlType {
+                $crate::GqlType::Int
+            }
         }
     )*};
 }
@@ -113,6 +153,9 @@ impl Wire for bool {
     fn from_wire(v: &LightValue) -> Result<Self, String> {
         v.as_bool().ok_or_else(|| "真偽値が必要です".into())
     }
+    fn gql_type() -> GqlType {
+        GqlType::Boolean
+    }
 }
 impl Wire for String {
     fn to_wire(&self) -> String {
@@ -121,6 +164,9 @@ impl Wire for String {
     fn from_wire(v: &LightValue) -> Result<Self, String> {
         v.as_str().map(str::to_string).ok_or_else(|| "文字列が必要です".into())
     }
+    fn gql_type() -> GqlType {
+        GqlType::Str
+    }
 }
 impl<T: Wire> Wire for Vec<T> {
     fn to_wire(&self) -> String {
@@ -128,6 +174,9 @@ impl<T: Wire> Wire for Vec<T> {
     }
     fn from_wire(v: &LightValue) -> Result<Self, String> {
         v.as_array().ok_or("配列が必要です")?.iter().map(T::from_wire).collect()
+    }
+    fn gql_type() -> GqlType {
+        GqlType::List(Box::new(T::gql_type()))
     }
 }
 
@@ -172,6 +221,12 @@ macro_rules! wire_struct {
             }
             fn from_wire(v: &$crate::LightValue) -> Result<Self, String> {
                 Ok($t { $($f: $crate::field::<$ty>(v, stringify!($f))?),* })
+            }
+            fn gql_type() -> $crate::GqlType {
+                $crate::GqlType::Object {
+                    name: stringify!($t),
+                    fields: vec![$((stringify!($f), <$ty as $crate::Wire>::gql_type())),*],
+                }
             }
         }
     };

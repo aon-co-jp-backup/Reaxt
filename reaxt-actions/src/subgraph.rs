@@ -3,9 +3,75 @@
 //! Cosmo Routerはこのサブグラフを他のサブグラフと合成し、`POST /_reaxt/graphql`へ問い合わせる。
 //! 対応する問い合わせの形: ルートのフィールドを並べ、引数は `input: $変数` か `input: リテラル`(オブジェクト・配列・文字列・数値・真偽・null・列挙・入れ子の`$変数`)。
 //! 戻り値はJSONスカラーなので下位の選択は不要。認証・`x-reaxt`ヘッダーはRouter側のヘッダー伝播で付ける。
+use crate::GqlType;
 use reaxt::app::{App, Gateway, Request, Response};
 use rust_json::{parse_light_secure, quote_json, LightLimits, LightValue};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// 型付きで公開するアクションの記録(`ModuleActions::action` / `entity` が登録する)。
+/// 同じプロセスの全 `App` で共有する(キーはConnectのパス)。
+#[derive(Default)]
+struct Registry {
+    /// パス → 出力の型
+    outputs: Vec<(String, GqlType)>,
+    /// エンティティ: (型名, 鍵フィールド, 解決するアクションのパス)
+    entities: Vec<(String, Vec<String>, String)>,
+}
+static REGISTRY: Mutex<Registry> = Mutex::new(Registry { outputs: Vec::new(), entities: Vec::new() });
+
+fn registry() -> std::sync::MutexGuard<'static, Registry> {
+    REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// アクションの出力型を記録する(同じパスは上書き)。
+pub fn register_output(path: &str, out: GqlType) {
+    let mut r = registry();
+    r.outputs.retain(|(p, _)| p != path);
+    r.outputs.push((path.to_string(), out));
+}
+
+/// エンティティを記録する。`key` は入力の `Object`、`out` は出力の `Object`(その名前がエンティティの型名)。
+pub fn register_entity(path: &str, key: GqlType, out: GqlType) {
+    let (GqlType::Object { fields: kf, .. }, GqlType::Object { name, .. }) = (&key, &out) else {
+        return; // 構造体でなければエンティティにできない(何も登録しない)
+    };
+    let keys: Vec<String> = kf.iter().map(|(n, _)| n.to_string()).collect();
+    let mut r = registry();
+    r.entities.retain(|(t, _, _)| t != name);
+    r.entities.push((name.to_string(), keys, path.to_string()));
+}
+
+fn output_of(path: &str) -> Option<GqlType> {
+    registry().outputs.iter().find(|(p, _)| p == path).map(|(_, t)| t.clone())
+}
+
+/// GraphQLの型名(フィールドの戻り値として書く形)。
+fn gql_ref(t: &GqlType) -> String {
+    match t {
+        GqlType::Json => "JSON".into(),
+        GqlType::Int => "Int!".into(),
+        GqlType::Boolean => "Boolean!".into(),
+        GqlType::Str => "String!".into(),
+        GqlType::List(i) => format!("[{}]!", gql_ref(i)),
+        GqlType::Object { name, .. } => format!("{name}!"),
+    }
+}
+
+/// 型の中に出てくるオブジェクト型を集める(名前の重複は最初のものだけ)。
+fn collect_objects<'a>(t: &'a GqlType, out: &mut Vec<(&'static str, &'a Vec<(&'static str, GqlType)>)>) {
+    match t {
+        GqlType::List(i) => collect_objects(i, out),
+        GqlType::Object { name, fields } => {
+            if !out.iter().any(|(n, _)| n == name) {
+                out.push((name, fields));
+                for (_, ft) in fields {
+                    collect_objects(ft, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 pub const PATH: &str = "/_reaxt/graphql";
 
@@ -40,17 +106,33 @@ fn split_paths(manifest_paths: &[String]) -> (Vec<(&str, &str)>, Vec<(&str, &str
 /// 連合(Federation v2)対応のSDL。`Get*`/`List*`/`Read*` は Query、それ以外は Mutation。
 pub fn sdl(manifest_paths: &[String]) -> String {
     let (reads, writes) = split_paths(manifest_paths);
+    let ret = |s: &str, m: &str| output_of(&format!("/{s}/{m}")).map_or_else(|| "JSON".to_string(), |t| gql_ref(&t));
     let mut o = String::from(
-        "extend schema @link(url: \"https://specs.apollo.dev/federation/v2.0\", import: [\"@shareable\"])\n\nscalar JSON\n\ntype Query {\n  reaxt_ready: Boolean! @shareable\n",
+        "extend schema @link(url: \"https://specs.apollo.dev/federation/v2.0\", import: [\"@shareable\", \"@key\"])\n\nscalar JSON\n\ntype Query {\n  reaxt_ready: Boolean! @shareable\n",
     );
     for (s, m) in &reads {
-        o.push_str(&format!("  {}(input: JSON): JSON\n", field_name(s, m)));
+        o.push_str(&format!("  {}(input: JSON): {}\n", field_name(s, m), ret(s, m)));
     }
     o.push_str("}\n");
     if !writes.is_empty() {
         o.push_str("\ntype Mutation {\n");
         for (s, m) in &writes {
-            o.push_str(&format!("  {}(input: JSON): JSON\n", field_name(s, m)));
+            o.push_str(&format!("  {}(input: JSON): {}\n", field_name(s, m), ret(s, m)));
+        }
+        o.push_str("}\n");
+    }
+    // 型付きの出力に出てくるオブジェクト型(エンティティには `@key`)
+    let mut objs: Vec<(&'static str, &Vec<(&'static str, GqlType)>)> = Vec::new();
+    let outs: Vec<GqlType> = manifest_paths.iter().filter_map(|p| output_of(p)).collect();
+    for t in &outs {
+        collect_objects(t, &mut objs);
+    }
+    let ents = registry().entities.clone();
+    for (name, fields) in objs {
+        let key = ents.iter().find(|(t, _, _)| t == name).map(|(_, k, _)| format!(" @key(fields: \"{}\")", k.join(" "))).unwrap_or_default();
+        o.push_str(&format!("\ntype {name}{key} {{\n"));
+        for (f, ft) in fields {
+            o.push_str(&format!("  {f}: {}\n", gql_ref(ft)));
         }
         o.push_str("}\n");
     }
@@ -60,8 +142,10 @@ pub fn sdl(manifest_paths: &[String]) -> String {
 struct Root {
     alias: String,
     field: String,
-    /// `input:` の右辺(GraphQLの値の文字列)。実行時にJSONへ変換する。
-    input: Option<String>,
+    /// 引数の全文(`input: ...` や `representations: ...`)。
+    args: String,
+    /// 下位の選択(`{ ... }` の中身)。無ければ None。
+    sel: Option<String>,
 }
 
 /// 問い合わせ文字列から、ルートのフィールド(別名・名前・`input: $v`)を取り出す。
@@ -154,20 +238,15 @@ fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
             }
             let args: String = b[st..i.min(b.len())].iter().collect();
             i += 1;
-            let args = args.trim();
-            if !args.is_empty() {
-                let rest = args.strip_prefix("input").map(str::trim_start).and_then(|r| r.strip_prefix(':')).map(str::trim);
-                match rest {
-                    Some(v) if !v.is_empty() => input_src = Some(v.to_string()),
-                    _ => return Err("引数は input: 値 の形だけ対応です".into()),
-                }
-            }
+            input_src = Some(args.trim().to_string());
         }
-        // 下位の選択(あっても無視)
+        // 下位の選択(型付きの出力では結果の射影に使う。`JSON` を返すフィールドでは無視する)
         while i < b.len() && b[i].is_whitespace() {
             i += 1;
         }
+        let mut sel = None;
         if i < b.len() && b[i] == '{' {
+            let st = i + 1;
             let mut d = 0;
             while i < b.len() {
                 match b[i] {
@@ -175,6 +254,7 @@ fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
                     '}' => {
                         d -= 1;
                         if d == 0 {
+                            sel = Some(b[st..i].iter().collect::<String>());
                             i += 1;
                             break;
                         }
@@ -184,7 +264,7 @@ fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
                 i += 1;
             }
         }
-        roots.push(Root { alias, field, input: input_src });
+        roots.push(Root { alias, field, args: input_src.unwrap_or_default(), sel });
     }
     if roots.is_empty() {
         return Err("ルートのフィールドがありません".into());
@@ -318,6 +398,190 @@ fn gql_value_to_json(src: &str, vars: Option<&LightValue>) -> Result<String, Str
     Ok(out)
 }
 
+/// 選択(`{ a b: c d { e } ... on T { f } }`)の1項目。
+#[derive(Debug)]
+struct Sel {
+    alias: String,
+    name: String,
+    children: Vec<Sel>,
+    /// `... on T` のとき T
+    on: Option<String>,
+}
+
+fn parse_selection(src: &str) -> Result<Vec<Sel>, String> {
+    let b: Vec<char> = src.chars().collect();
+    let mut i = 0;
+    let v = parse_sel_list(&b, &mut i, 0)?;
+    Ok(v)
+}
+
+fn parse_sel_list(b: &[char], i: &mut usize, depth: usize) -> Result<Vec<Sel>, String> {
+    if depth > 16 {
+        return Err("選択の入れ子が深すぎます".into());
+    }
+    let ident = |i: &mut usize| -> String {
+        let st = *i;
+        while *i < b.len() && (b[*i].is_ascii_alphanumeric() || b[*i] == '_') {
+            *i += 1;
+        }
+        b[st..*i].iter().collect()
+    };
+    let ws = |i: &mut usize| {
+        while *i < b.len() && (b[*i].is_whitespace() || b[*i] == ',') {
+            *i += 1;
+        }
+    };
+    let mut out = Vec::new();
+    loop {
+        ws(i);
+        if *i >= b.len() || b[*i] == '}' {
+            return Ok(out);
+        }
+        if b[*i] == '@' {
+            return Err("選択内のディレクティブは未対応です".into());
+        }
+        if b[*i..].starts_with(&['.', '.', '.']) {
+            *i += 3;
+            ws(i);
+            let kw = ident(i);
+            if kw != "on" {
+                return Err("`... on 型 { }` の形だけ対応です(フラグメント名は未対応)".into());
+            }
+            ws(i);
+            let ty = ident(i);
+            ws(i);
+            if b.get(*i) != Some(&'{') {
+                return Err("`... on 型` の後に { がありません".into());
+            }
+            *i += 1;
+            let children = parse_sel_list(b, i, depth + 1)?;
+            if b.get(*i) != Some(&'}') {
+                return Err("選択が閉じていません".into());
+            }
+            *i += 1;
+            out.push(Sel { alias: String::new(), name: "...".into(), children, on: Some(ty) });
+            continue;
+        }
+        let first = ident(i);
+        if first.is_empty() {
+            return Err(format!("解釈できない文字 {:?}", b[*i]));
+        }
+        ws(i);
+        let (alias, name) = if b.get(*i) == Some(&':') {
+            *i += 1;
+            ws(i);
+            (first, ident(i))
+        } else {
+            (first.clone(), first)
+        };
+        ws(i);
+        if b.get(*i) == Some(&'(') {
+            // 引数は読み飛ばす(出力の射影には使わない)
+            let mut d = 0;
+            while *i < b.len() {
+                match b[*i] {
+                    '(' => d += 1,
+                    ')' => {
+                        d -= 1;
+                        if d == 0 {
+                            *i += 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                *i += 1;
+            }
+            ws(i);
+        }
+        let mut children = Vec::new();
+        if b.get(*i) == Some(&'{') {
+            *i += 1;
+            children = parse_sel_list(b, i, depth + 1)?;
+            if b.get(*i) != Some(&'}') {
+                return Err("選択が閉じていません".into());
+            }
+            *i += 1;
+        }
+        out.push(Sel { alias, name, children, on: None });
+    }
+}
+
+/// 型 `ty` の値 `v` を選択 `sel` で射影してJSONの文字列にする。
+fn project(v: &LightValue, ty: &GqlType, sel: &[Sel]) -> String {
+    match ty {
+        GqlType::List(inner) => match v.as_array() {
+            Some(a) => format!("[{}]", a.iter().map(|x| project(x, inner, sel)).collect::<Vec<_>>().join(",")),
+            None => "null".into(),
+        },
+        GqlType::Object { name, fields } => {
+            let mut parts: Vec<String> = Vec::new();
+            project_into(v, name, fields, sel, &mut parts);
+            format!("{{{}}}", parts.join(","))
+        }
+        _ => v.to_json(),
+    }
+}
+
+fn project_into(v: &LightValue, tname: &str, fields: &[(&'static str, GqlType)], sel: &[Sel], parts: &mut Vec<String>) {
+    for s in sel {
+        if let Some(on) = &s.on {
+            if on == tname {
+                project_into(v, tname, fields, &s.children, parts);
+            }
+            continue;
+        }
+        let val = if s.name == "__typename" {
+            quote_json(tname)
+        } else {
+            match (fields.iter().find(|(n, _)| *n == s.name), v.get(&s.name)) {
+                (Some((_, ft)), Some(x)) if !s.children.is_empty() => project(x, ft, &s.children),
+                (_, Some(x)) => x.to_json(),
+                _ => "null".into(),
+            }
+        };
+        parts.push(format!("{}:{val}", quote_json(&s.alias)));
+    }
+}
+
+/// 応答(`call` の本文)を、フィールドの出力型と選択に従って整える。型を持たない出力(`JSON`)はそのまま。
+fn shape_output(path: &str, raw: &str, sel: Option<&str>) -> Result<String, String> {
+    let (Some(ty), Some(sel)) = (output_of(path), sel) else { return Ok(raw.to_string()) };
+    if ty == GqlType::Json {
+        return Ok(raw.to_string());
+    }
+    let sels = parse_selection(sel)?;
+    let v = parse_light_secure(raw, &LightLimits::small()).map_err(|e| e.to_string())?;
+    Ok(project(&v, &ty, &sels))
+}
+
+/// `_entities(representations: [...])`: 表現ごとに、型に登録されたアクションで解決し、選択で射影する。
+fn resolve_entities(r: &Root, vars: Option<&LightValue>, call: &dyn Fn(&str, &str) -> (u16, String)) -> Result<String, String> {
+    let rest = r.args.strip_prefix("representations").map(str::trim_start).and_then(|x| x.strip_prefix(':')).ok_or("_entities には representations 引数が必要です")?;
+    let reps_json = gql_value_to_json(rest.trim(), vars)?;
+    let reps = parse_light_secure(&reps_json, &LightLimits::small()).map_err(|e| e.to_string())?;
+    let reps = reps.as_array().ok_or("representations は配列です")?;
+    let sels = parse_selection(r.sel.as_deref().unwrap_or(""))?;
+    let ents = registry().entities.clone();
+    let mut out = Vec::new();
+    for rep in reps {
+        let tname = rep.get("__typename").and_then(|t| t.as_str()).unwrap_or("");
+        let Some((_, _, path)) = ents.iter().find(|(t, _, _)| t == tname) else {
+            out.push("null".to_string());
+            continue;
+        };
+        let (status, body) = call(path, &rep.to_json());
+        if status != 200 {
+            out.push("null".to_string());
+            continue;
+        }
+        let ty = output_of(path).unwrap_or(GqlType::Json);
+        let v = parse_light_secure(&body, &LightLimits::small()).map_err(|e| e.to_string())?;
+        out.push(project(&v, &ty, &sels));
+    }
+    Ok(format!("[{}]", out.join(",")))
+}
+
 fn gql_error(msg: &str, code: &str, status: u16) -> String {
     format!("{{\"message\":{},\"extensions\":{{\"code\":{},\"status\":{status}}}}}", quote_json(msg), quote_json(code))
 }
@@ -367,13 +631,36 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
             data.push(format!("{}:true", quote_json(&r.alias)));
             continue;
         }
+        if r.field == "_entities" {
+            match resolve_entities(&r, vars, call) {
+                Ok(j) => data.push(format!("{}:{j}", quote_json(&r.alias))),
+                Err(e) => {
+                    errors.push(gql_error(&e, "invalid_argument", 400));
+                    data.push(format!("{}:null", quote_json(&r.alias)));
+                }
+            }
+            continue;
+        }
         let target = paths.iter().find(|p| p.strip_prefix('/').and_then(|x| x.rsplit_once('/')).map_or(false, |(s, m)| field_name(s, m) == r.field));
         let Some(path) = target else {
             errors.push(gql_error(&format!("未知のフィールド {}", r.field), "not_found", 404));
             data.push(format!("{}:null", quote_json(&r.alias)));
             continue;
         };
-        let input = match &r.input {
+        // 引数は `input: 値` だけ(無ければ入力なし)
+        let input_src = if r.args.is_empty() {
+            None
+        } else {
+            match r.args.strip_prefix("input").map(str::trim_start).and_then(|x| x.strip_prefix(':')).map(str::trim) {
+                Some(v) if !v.is_empty() => Some(v.to_string()),
+                _ => {
+                    errors.push(gql_error("引数は input: 値 の形だけ対応です", "invalid_argument", 400));
+                    data.push(format!("{}:null", quote_json(&r.alias)));
+                    continue;
+                }
+            }
+        };
+        let input = match &input_src {
             Some(src) => match gql_value_to_json(src, vars) {
                 Ok(j) => j,
                 Err(e) => {
@@ -386,7 +673,13 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
         };
         let (status, out) = call(path, &input);
         if status == 200 {
-            data.push(format!("{}:{}", quote_json(&r.alias), out));
+            match shape_output(path, &out, r.sel.as_deref()) {
+                Ok(shaped) => data.push(format!("{}:{}", quote_json(&r.alias), shaped)),
+                Err(e) => {
+                    errors.push(gql_error(&e, "invalid_argument", 400));
+                    data.push(format!("{}:null", quote_json(&r.alias)));
+                }
+            }
         } else {
             let (code, msg) = match parse_light_secure(&out, &LightLimits::small()) {
                 Ok(e) => (e.get("code").and_then(|x| x.as_str()).unwrap_or("unknown").to_string(), e.get("message").and_then(|x| x.as_str()).unwrap_or("").to_string()),
@@ -427,7 +720,7 @@ mod tests {
     #[test]
     fn sdl_lists_fields() {
         let s = sdl(&paths());
-        assert!(s.contains("demo_v1_Counter_Add(input: JSON): JSON"));
+        assert!(s.contains("demo_v1_Counter_Add(input: JSON):"));
         assert!(s.contains("scalar JSON"));
     }
 
@@ -492,5 +785,31 @@ mod tests {
     fn answers_federation_sdl() {
         let (_, out) = execute("{\"query\":\"query { _service { sdl } }\"}", &paths(), &fake);
         assert!(out.contains("_service") && out.contains("scalar JSON"), "{out}");
+    }
+
+    #[derive(Debug)]
+    struct EKey { id: String }
+    crate::wire_struct!(EKey { id: String });
+    #[derive(Debug)]
+    struct Ent { id: String, n: u32 }
+    crate::wire_struct!(Ent { id: String, n: u32 });
+
+    #[test]
+    fn typed_entity_sdl_and_entities_call() {
+        register_entity("/t.v1.E/GetEnt", <EKey as crate::Wire>::gql_type(), <Ent as crate::Wire>::gql_type());
+        register_output("/t.v1.E/GetEnt", <Ent as crate::Wire>::gql_type());
+        let p = vec!["/t.v1.E/GetEnt".to_string()];
+        let s = sdl(&p);
+        assert!(s.contains("t_v1_E_GetEnt(input: JSON): Ent!"), "{s}");
+        assert!(s.contains("type Ent @key(fields: \"id\")"), "{s}");
+        assert!(s.contains("n: Int!"), "{s}");
+        let call = |_: &str, b: &str| (200u16, format!("{{\"id\":\"x\",\"n\":7,\"b\":{b}}}"));
+        let q = "{\"query\":\"query($r:[_Any!]!){ _entities(representations:$r){ ... on Ent { n } } }\",\"variables\":{\"r\":[{\"__typename\":\"Ent\",\"id\":\"x\"},{\"__typename\":\"Nope\"}]}}";
+        let (st, out) = execute(q, &p, &call);
+        assert_eq!(st, 200);
+        assert!(out.contains("\"_entities\":[{\"n\":7},null]"), "{out}");
+        let q2 = "{\"query\":\"{ t_v1_E_GetEnt(input:{id:\\\"x\\\"}) { id __typename } }\"}";
+        let (_, o2) = execute(q2, &p, &call);
+        assert!(o2.contains("{\"id\":\"x\",\"__typename\":\"Ent\"}"), "{o2}");
     }
 }

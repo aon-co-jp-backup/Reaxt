@@ -12,14 +12,18 @@ fn main() {
     use std::sync::Arc;
 
     const VISIT: reaxt_actions::Action<(), u32> = reaxt_actions::Action::new("demo.v1.Greeter", "Visit");
+    const VISITS: reaxt_actions::Action<(), u32> = reaxt_actions::Action::new("demo.v1.Greeter", "GetVisits");
     let port = std::env::args().nth(1).unwrap_or_else(|| "8766".into());
     let visits = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let v = visits.clone();
+    let (v, v2) = (visits.clone(), visits.clone());
     let app = App::new("Reaxt greeter")
         .global_guard(reaxt_actions::csrf_guard)
-        .module(reaxt::backend::Module::new().action(&VISIT, move |_, _: ()| {
-            Ok(v.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1)
-        }))
+        .module(
+            reaxt::backend::Module::new()
+                .action(&VISIT, move |_, _: ()| Ok(v.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1))
+                // `Get*` は GraphQL の Query として公開される(読み取り用)
+                .action(&VISITS, move |_, _: ()| Ok(v2.load(std::sync::atomic::Ordering::SeqCst))),
+        )
         .finish();
     let app = reaxt_actions::subgraph::install(app);
     let l = std::net::TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind");

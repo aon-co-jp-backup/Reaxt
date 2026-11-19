@@ -18,12 +18,16 @@ fn main() {
 
     // サーバーが持つ状態(Server Actionが更新し、SSRが初期値として描く)
     let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let (c_page, c_act) = (counter.clone(), counter.clone());
+    let (c_page, c_act, c_get) = (counter.clone(), counter.clone(), counter.clone());
+    const COUNT_GET: reaxt_actions::Action<(), u32> = reaxt_actions::Action::new("demo.v1.Counter", "GetCount");
     let app = App::new("Reaxt counter")
         .global_guard(reaxt_actions::csrf_guard)
-        .module(reaxt::backend::Module::new().action(&reaxt_counter::INC, move |_, _: ()| {
-            Ok(c_act.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1)
-        }))
+        .module(
+            reaxt::backend::Module::new()
+                .action(&reaxt_counter::INC, move |_, _: ()| Ok(c_act.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1))
+                // `Get*` は GraphQL の Query として公開される(読み取り用。Cosmo の分割試験に使う)
+                .action(&COUNT_GET, move |_, _: ()| Ok(c_get.load(std::sync::atomic::Ordering::SeqCst))),
+        )
         .page("actions.rs", RenderMode::Islands, move |_| {
             reaxt_counter::actions_page(c_page.load(std::sync::atomic::Ordering::SeqCst))
         })

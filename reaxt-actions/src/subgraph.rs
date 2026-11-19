@@ -17,17 +17,43 @@ pub fn field_name(service: &str, method: &str) -> String {
     s
 }
 
-/// 連合(Federation v2)対応のSDL。
-pub fn sdl(manifest_paths: &[String]) -> String {
-    let mut o = String::from(
-        "extend schema @link(url: \"https://specs.apollo.dev/federation/v2.0\", import: [\"@shareable\"])\n\nscalar JSON\n\ntype Query {\n  reaxt_ready: Boolean! @shareable\n}\n\ntype Mutation {\n",
-    );
+/// 読み取り用のメソッドか(名前が `Get` / `List` / `Read` で始まる)。GraphQLでは Query、それ以外は Mutation として見せる。
+pub fn is_read_method(method: &str) -> bool {
+    ["Get", "List", "Read"].iter().any(|p| method.strip_prefix(p).is_some_and(|r| r.is_empty() || r.starts_with(|c: char| c.is_ascii_uppercase())))
+}
+
+/// `(サービス, メソッド)` に分けたパス一覧(読み取り用, 変更用)。
+fn split_paths(manifest_paths: &[String]) -> (Vec<(&str, &str)>, Vec<(&str, &str)>) {
+    let (mut reads, mut writes) = (Vec::new(), Vec::new());
     for p in manifest_paths {
         if let Some((s, m)) = p.strip_prefix('/').and_then(|x| x.rsplit_once('/')) {
-            o.push_str(&format!("  {}(input: JSON): JSON\n", field_name(s, m)));
+            if is_read_method(m) {
+                reads.push((s, m));
+            } else {
+                writes.push((s, m));
+            }
         }
     }
+    (reads, writes)
+}
+
+/// 連合(Federation v2)対応のSDL。`Get*`/`List*`/`Read*` は Query、それ以外は Mutation。
+pub fn sdl(manifest_paths: &[String]) -> String {
+    let (reads, writes) = split_paths(manifest_paths);
+    let mut o = String::from(
+        "extend schema @link(url: \"https://specs.apollo.dev/federation/v2.0\", import: [\"@shareable\"])\n\nscalar JSON\n\ntype Query {\n  reaxt_ready: Boolean! @shareable\n",
+    );
+    for (s, m) in &reads {
+        o.push_str(&format!("  {}(input: JSON): JSON\n", field_name(s, m)));
+    }
     o.push_str("}\n");
+    if !writes.is_empty() {
+        o.push_str("\ntype Mutation {\n");
+        for (s, m) in &writes {
+            o.push_str(&format!("  {}(input: JSON): JSON\n", field_name(s, m)));
+        }
+        o.push_str("}\n");
+    }
     o
 }
 
@@ -311,20 +337,20 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
     // open-cosmo のゲートウェイは、ルートのフィールド名をこの問い合わせで探す(`remote_subgraphs.rs`)。
     // 型や引数までは返さない最小の応答(`queryType`/`mutationType` の `fields { name }` だけ)。
     if query.contains("__schema") {
-        let muts: Vec<String> = paths
-            .iter()
-            .filter_map(|p| p.strip_prefix('/').and_then(|x| x.rsplit_once('/')).map(|(s, m)| format!("{{\"name\":{}}}", quote_json(&field_name(s, m)))))
-            .collect();
+        let (reads, writes) = split_paths(paths);
+        let list = |v: &[(&str, &str)]| v.iter().map(|(s, m)| format!("{{\"name\":{}}}", quote_json(&field_name(s, m)))).collect::<Vec<_>>().join(",");
+        let mut q = String::from("{\"name\":\"reaxt_ready\"}");
+        if !reads.is_empty() {
+            q.push(',');
+            q.push_str(&list(&reads));
+        }
         return (
             200,
             format!(
-                "{{\"data\":{{\"__schema\":{{\"queryType\":{{\"fields\":[{{\"name\":\"reaxt_ready\"}}]}},\"mutationType\":{{\"fields\":[{}]}}}}}}}}",
-                muts.join(",")
+                "{{\"data\":{{\"__schema\":{{\"queryType\":{{\"fields\":[{q}]}},\"mutationType\":{{\"fields\":[{}]}}}}}}}}",
+                list(&writes)
             ),
         );
-    }
-    if query.contains("reaxt_ready") && !query.contains("mutation") {
-        return (200, "{\"data\":{\"reaxt_ready\":true}}".into());
     }
     let roots = match parse_roots(query) {
         Ok(r) => r,
@@ -335,6 +361,10 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
     for r in roots {
         if r.field == "__typename" {
             data.push(format!("{}:\"Mutation\"", quote_json(&r.alias)));
+            continue;
+        }
+        if r.field == "reaxt_ready" {
+            data.push(format!("{}:true", quote_json(&r.alias)));
             continue;
         }
         let target = paths.iter().find(|p| p.strip_prefix('/').and_then(|x| x.rsplit_once('/')).map_or(false, |(s, m)| field_name(s, m) == r.field));
@@ -438,6 +468,24 @@ mod tests {
         assert!(out.contains("not_found"), "{out}");
         let (st, _) = execute("{bad", &paths(), &fake);
         assert_eq!(st, 400);
+    }
+
+    #[test]
+    fn read_methods_become_query_fields() {
+        assert!(is_read_method("Get") && is_read_method("GetVisits") && is_read_method("ListAll") && is_read_method("ReadOne"));
+        assert!(!is_read_method("Getter") && !is_read_method("Add") && !is_read_method("Settle"));
+        let p = vec!["/demo.v1.Counter/Add".to_string(), "/demo.v1.Counter/GetTotal".to_string()];
+        let s = sdl(&p);
+        assert!(s.contains("type Query {\n  reaxt_ready: Boolean! @shareable\n  demo_v1_Counter_GetTotal(input: JSON): JSON"), "{s}");
+        assert!(s.contains("type Mutation {\n  demo_v1_Counter_Add(input: JSON): JSON"), "{s}");
+        // 変更用が1つも無ければ Mutation 型は出さない
+        assert!(!sdl(&["/demo.v1.Counter/Get".to_string()]).contains("type Mutation"));
+        // 読み取りは Query として実行でき、reaxt_ready と並べても動く
+        let call = |path: &str, _b: &str| -> (u16, String) { (200, format!("\"{path}\"")) };
+        let (_, out) = execute("{\"query\":\"{ reaxt_ready demo_v1_Counter_GetTotal }\"}", &p, &call);
+        assert!(out.contains("\"reaxt_ready\":true") && out.contains("\"demo_v1_Counter_GetTotal\":\"/demo.v1.Counter/GetTotal\""), "{out}");
+        let (_, out) = execute("{\"query\":\"{ __schema { queryType { fields { name } } } }\"}", &p, &call);
+        assert!(out.contains("demo_v1_Counter_GetTotal") && out.contains("reaxt_ready"), "{out}");
     }
 
     #[test]

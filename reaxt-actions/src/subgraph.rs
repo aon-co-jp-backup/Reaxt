@@ -1,7 +1,7 @@
 //! WunderGraph Cosmo(GraphQL連合)向けのサブグラフ入口。
 //! Reaxtが公開するConnectメソッドを、GraphQLのMutationフィールド(`pkg_Service_Method(input: JSON): JSON`)として見せる。
 //! Cosmo Routerはこのサブグラフを他のサブグラフと合成し、`POST /_reaxt/graphql`へ問い合わせる。
-//! 対応する問い合わせの形: ルートのフィールドを並べ、引数は `input: $変数` だけ(リテラルは未対応)。
+//! 対応する問い合わせの形: ルートのフィールドを並べ、引数は `input: $変数` か `input: リテラル`(オブジェクト・配列・文字列・数値・真偽・null・列挙・入れ子の`$変数`)。
 //! 戻り値はJSONスカラーなので下位の選択は不要。認証・`x-reaxt`ヘッダーはRouter側のヘッダー伝播で付ける。
 use reaxt::app::{App, Gateway, Request, Response};
 use rust_json::{parse_light_secure, quote_json, LightLimits, LightValue};
@@ -34,7 +34,8 @@ pub fn sdl(manifest_paths: &[String]) -> String {
 struct Root {
     alias: String,
     field: String,
-    var: Option<String>,
+    /// `input:` の右辺(GraphQLの値の文字列)。実行時にJSONへ変換する。
+    input: Option<String>,
 }
 
 /// 問い合わせ文字列から、ルートのフィールド(別名・名前・`input: $v`)を取り出す。
@@ -108,7 +109,7 @@ fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
         while i < b.len() && b[i].is_whitespace() {
             i += 1;
         }
-        let mut var = None;
+        let mut input_src = None;
         if i < b.len() && b[i] == '(' {
             let st = i + 1;
             let mut d = 0;
@@ -130,9 +131,9 @@ fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
             let args = args.trim();
             if !args.is_empty() {
                 let rest = args.strip_prefix("input").map(str::trim_start).and_then(|r| r.strip_prefix(':')).map(str::trim);
-                match rest.and_then(|r| r.strip_prefix('$')) {
-                    Some(name) if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.is_empty() => var = Some(name.to_string()),
-                    _ => return Err("引数は input: $変数 の形だけ対応です(リテラル不可)".into()),
+                match rest {
+                    Some(v) if !v.is_empty() => input_src = Some(v.to_string()),
+                    _ => return Err("引数は input: 値 の形だけ対応です".into()),
                 }
             }
         }
@@ -157,12 +158,138 @@ fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
                 i += 1;
             }
         }
-        roots.push(Root { alias, field, var });
+        roots.push(Root { alias, field, input: input_src });
     }
     if roots.is_empty() {
         return Err("ルートのフィールドがありません".into());
     }
     Ok(roots)
+}
+
+/// GraphQLの値(リテラル・`$変数`)をJSONの文字列へ変換する。列挙値は文字列、オブジェクトのキーは引用符つきにする。
+/// 変数が無い・未定義なら `null`。ブロック文字列(`"""`)は未対応。
+fn gql_value_to_json(src: &str, vars: Option<&LightValue>) -> Result<String, String> {
+    struct P<'a> {
+        b: Vec<char>,
+        i: usize,
+        vars: Option<&'a LightValue>,
+    }
+    impl P<'_> {
+        fn ws(&mut self) {
+            while self.i < self.b.len() && (self.b[self.i].is_whitespace() || self.b[self.i] == ',') {
+                self.i += 1;
+            }
+        }
+        fn name(&mut self) -> String {
+            let st = self.i;
+            while self.i < self.b.len() && (self.b[self.i].is_ascii_alphanumeric() || matches!(self.b[self.i], '_' | '.' | '+' | '-')) {
+                self.i += 1;
+            }
+            self.b[st..self.i].iter().collect()
+        }
+        fn value(&mut self, depth: usize) -> Result<String, String> {
+            if depth > 32 {
+                return Err("引数の入れ子が深すぎます".into());
+            }
+            self.ws();
+            let Some(&c) = self.b.get(self.i) else { return Err("値がありません".into()) };
+            match c {
+                '$' => {
+                    self.i += 1;
+                    let n = self.name();
+                    Ok(self.vars.and_then(|m| m.get(&n)).map(LightValue::to_json).unwrap_or_else(|| "null".into()))
+                }
+                '"' => {
+                    if self.b[self.i..].starts_with(&['"', '"', '"']) {
+                        return Err("ブロック文字列(\"\"\")は未対応です".into());
+                    }
+                    self.i += 1;
+                    let mut o = String::from("\"");
+                    while self.i < self.b.len() {
+                        let ch = self.b[self.i];
+                        self.i += 1;
+                        match ch {
+                            '\\' => {
+                                o.push('\\');
+                                if let Some(&n) = self.b.get(self.i) {
+                                    o.push(n);
+                                    self.i += 1;
+                                }
+                            }
+                            '"' => {
+                                o.push('"');
+                                return Ok(o);
+                            }
+                            _ => o.push(ch),
+                        }
+                    }
+                    Err("文字列が閉じていません".into())
+                }
+                '[' => {
+                    self.i += 1;
+                    let mut items = Vec::new();
+                    loop {
+                        self.ws();
+                        match self.b.get(self.i) {
+                            Some(']') => {
+                                self.i += 1;
+                                return Ok(format!("[{}]", items.join(",")));
+                            }
+                            None => return Err("配列が閉じていません".into()),
+                            _ => items.push(self.value(depth + 1)?),
+                        }
+                    }
+                }
+                '{' => {
+                    self.i += 1;
+                    let mut items = Vec::new();
+                    loop {
+                        self.ws();
+                        match self.b.get(self.i) {
+                            Some('}') => {
+                                self.i += 1;
+                                return Ok(format!("{{{}}}", items.join(",")));
+                            }
+                            None => return Err("オブジェクトが閉じていません".into()),
+                            _ => {
+                                let k = self.name();
+                                if k.is_empty() {
+                                    return Err("オブジェクトのキーが読めません".into());
+                                }
+                                self.ws();
+                                if self.b.get(self.i) != Some(&':') {
+                                    return Err("オブジェクトに : がありません".into());
+                                }
+                                self.i += 1;
+                                let v = self.value(depth + 1)?;
+                                items.push(format!("{}:{v}", quote_json(&k)));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let t = self.name();
+                    if t.is_empty() {
+                        return Err(format!("解釈できない文字 {c:?}"));
+                    }
+                    if matches!(t.as_str(), "null" | "true" | "false") {
+                        Ok(t)
+                    } else if t.chars().next().is_some_and(|x| x.is_ascii_digit() || x == '-') {
+                        t.parse::<f64>().map(|_| t.clone()).map_err(|_| format!("数値が不正です: {t}"))
+                    } else {
+                        Ok(quote_json(&t))
+                    }
+                }
+            }
+        }
+    }
+    let mut p = P { b: src.chars().collect(), i: 0, vars };
+    let out = p.value(0)?;
+    p.ws();
+    if p.i < p.b.len() {
+        return Err("引数の後ろに余分な文字があります".into());
+    }
+    Ok(out)
 }
 
 fn gql_error(msg: &str, code: &str, status: u16) -> String {
@@ -216,8 +343,15 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
             data.push(format!("{}:null", quote_json(&r.alias)));
             continue;
         };
-        let input = match &r.var {
-            Some(n) => vars.and_then(|m| m.get(n)).map(LightValue::to_json).unwrap_or_else(|| "null".into()),
+        let input = match &r.input {
+            Some(src) => match gql_value_to_json(src, vars) {
+                Ok(j) => j,
+                Err(e) => {
+                    errors.push(gql_error(&e, "invalid_argument", 400));
+                    data.push(format!("{}:null", quote_json(&r.alias)));
+                    continue;
+                }
+            },
             None => "null".into(),
         };
         let (status, out) = call(path, &input);
@@ -287,9 +421,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_literals_unknown_fields_and_bad_json() {
-        let (_, out) = execute("{\"query\":\"mutation { demo_v1_Counter_Add(input: {by: 1}) }\"}", &paths(), &fake);
-        assert!(out.contains("リテラル不可"), "{out}");
+    fn accepts_literal_arguments() {
+        let q = "{\"query\":\"mutation($n: Int) { a: demo_v1_Counter_Add(input: {by: 1, tags: [\\\"x\\\", ok], deep: {n: $n, f: -2.5, t: true, z: null}}) }\",\"variables\":{\"n\":7}}";
+        let (_, out) = execute(q, &paths(), &fake);
+        assert!(out.contains("\"a\":{\"echo\":{\"by\":1,\"tags\":[\"x\",\"ok\"],\"deep\":{\"n\":7,\"f\":-2.5,\"t\":true,\"z\":null}}}"), "{out}");
+        // 壊れたリテラルはエラーになり、他のフィールドには影響しない
+        let (_, out) = execute("{\"query\":\"mutation { demo_v1_Counter_Add(input: {by: ) }\"}", &paths(), &fake);
+        assert!(out.contains("invalid_argument"), "{out}");
+    }
+
+    #[test]
+    fn rejects_unknown_fields_and_bad_json() {
+        let (_, out) = execute("{\"query\":\"mutation { demo_v1_Counter_Add(other: 1) }\"}", &paths(), &fake);
+        assert!(out.contains("input: 値"), "{out}");
         let (_, out) = execute("{\"query\":\"mutation { nope }\"}", &paths(), &fake);
         assert!(out.contains("not_found"), "{out}");
         let (st, _) = execute("{bad", &paths(), &fake);

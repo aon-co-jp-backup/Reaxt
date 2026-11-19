@@ -212,6 +212,20 @@ impl<T: Wire> Wire for Option<T> {
     }
 }
 
+/// 文字列キーの連想配列。GraphQLに連想配列の型は無いので、`JSON`として公開する。キーは並べ替えて出す(結果が毎回同じになる)。
+impl<T: Wire> Wire for std::collections::BTreeMap<String, T> {
+    fn to_wire(&self) -> String {
+        let parts: Vec<String> = self.iter().map(|(k, v)| format!("{}:{}", rust_json::quote_json(k), v.to_wire())).collect();
+        format!("{{{}}}", parts.join(","))
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        match v {
+            LightValue::Object(fields) => fields.iter().map(|(k, x)| T::from_wire(x).map(|t| (k.clone(), t)).map_err(|e| format!("{k}: {e}"))).collect(),
+            _ => Err("オブジェクトが必要です".into()),
+        }
+    }
+}
+
 /// 上限つきでJSON本文を読んで`T`にする。
 pub fn decode<T: Wire>(json: &str) -> Result<T, String> {
     let v = parse_light_secure(json, &LightLimits::small()).map_err(|e| e.to_string())?;
@@ -367,6 +381,31 @@ mod tests {
         assert!(decode::<i8>("300").is_err());
         assert!(decode::<u64>("-1").is_err());
         assert_eq!(7isize.to_wire(), "7");
+    }
+
+    fn gql_type_str(t: &GqlType) -> &'static str {
+        match t {
+            GqlType::Nullable(i) => gql_type_str(i),
+            GqlType::List(_) => "List",
+            _ => "other",
+        }
+    }
+
+    #[test]
+    fn nested_option_vec_and_map_round_trip() {
+        use std::collections::BTreeMap;
+        let v: Vec<Option<u32>> = decode("[1,null,3]").unwrap();
+        assert_eq!(v, vec![Some(1), None, Some(3)]);
+        assert_eq!(v.to_wire(), "[1,null,3]");
+        let o: Option<Vec<String>> = decode("[\"a\"]").unwrap();
+        assert_eq!(o, Some(vec!["a".to_string()]));
+        assert_eq!(decode::<Option<Vec<String>>>("null").unwrap(), None);
+        let m: BTreeMap<String, u32> = decode("{\"b\":2,\"a\":1}").unwrap();
+        assert_eq!(m.to_wire(), "{\"a\":1,\"b\":2}");
+        assert!(decode::<BTreeMap<String, u32>>("{\"a\":\"x\"}").unwrap_err().contains("a"));
+        assert!(decode::<BTreeMap<String, u32>>("[1]").is_err());
+        assert_eq!(<BTreeMap<String, u32> as Wire>::gql_type(), GqlType::Json);
+        assert_eq!(gql_type_str(&<Option<Vec<Option<u32>>> as Wire>::gql_type()), "List");
     }
 
     #[test]

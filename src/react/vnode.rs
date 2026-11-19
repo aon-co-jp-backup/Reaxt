@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub enum VNode {
     Element(VElement),
     Text(String),
+    Component(VComponent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,40 @@ pub struct VElement {
     /// Reactの`key`プロパティに相当。リストの子要素の同一性追跡に使う。
     pub key: Option<String>,
     pub children: Vec<VNode>,
+}
+
+
+/// 部品ノード。描画器(`component::resolve_root`)が自動idで展開する。解決後の木には残らない。
+#[derive(Clone)]
+pub struct VComponent {
+    pub key: Option<String>,
+    /// 部品関数の種類(関数ポインタのアドレス)。位置とkeyに加えてidの材料になる。
+    pub kind: usize,
+    pub render: std::sync::Arc<dyn Fn() -> VNode + Send + Sync>,
+}
+
+impl PartialEq for VComponent {
+    fn eq(&self, o: &Self) -> bool {
+        self.key == o.key && self.kind == o.kind && std::sync::Arc::ptr_eq(&self.render, &o.render)
+    }
+}
+impl Eq for VComponent {}
+impl std::fmt::Debug for VComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Component(kind={:#x}, key={:?})", self.kind, self.key)
+    }
+}
+
+impl VNode {
+    /// 部品を置く: `f` は `fn(&Props) -> VNode`。idは位置・関数の種類から自動で決まる。
+    pub fn component<P: Send + Sync + 'static>(f: fn(&P) -> VNode, props: P) -> VNode {
+        VNode::Component(VComponent { key: None, kind: f as usize, render: std::sync::Arc::new(move || f(&props)) })
+    }
+
+    /// keyつきで部品を置く(並べ替えても状態が付いて行く)。
+    pub fn component_keyed<P: Send + Sync + 'static>(key: impl Into<String>, f: fn(&P) -> VNode, props: P) -> VNode {
+        VNode::Component(VComponent { key: Some(key.into()), kind: f as usize, render: std::sync::Arc::new(move || f(&props)) })
+    }
 }
 
 impl VNode {
@@ -38,6 +73,7 @@ impl VNode {
         match self {
             VNode::Element(el) => el.key.as_deref(),
             VNode::Text(_) => None,
+            VNode::Component(c) => c.key.as_deref(),
         }
     }
 }

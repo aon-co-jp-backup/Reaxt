@@ -97,7 +97,7 @@ fn apply_children<D: Dom>(d: &D, parent: &D::Node, patches: &[ChildPatch]) {
 /// クライアントの描画関数の結果に必ず通す(SSR側は文字列化の時点で同じ結果になる)。
 pub fn normalize(v: VNode) -> VNode {
     match v {
-        VNode::Text(_) => v,
+        VNode::Text(_) | VNode::Component(_) => v,
         VNode::Element(mut el) => {
             let mut out: Vec<VNode> = Vec::with_capacity(el.children.len());
             for c in el.children {
@@ -120,6 +120,7 @@ pub fn normalize(v: VNode) -> VNode {
 pub fn matches_dom<D: Dom>(d: &D, n: &D::Node, v: &VNode) -> bool {
     match v {
         VNode::Text(t) => d.text(n).as_deref() == Some(t.as_str()),
+        VNode::Component(_) => false, // 解決済みの木だけを比べる
         VNode::Element(el) => {
             if d.tag(n).map(|t| t.eq_ignore_ascii_case(&el.tag)) != Some(true) {
                 return false;
@@ -356,7 +357,9 @@ impl<D: Dom> Runtime<D> {
 
     /// アイランド用: 再レンダーのたびに`scope`を有効にする(`on_click`のid名前空間)。
     pub fn mount_scoped(dom: Rc<D>, root: D::Node, id: ComponentId, scope: u32, render: impl Fn() -> VNode + 'static) -> Self {
-        let wrapped = move || normalize(with_scope(scope, &render));
+        // 部品は正規化の前に展開する(部品の出力どうしのテキストも融合させるため)。Appも同じ木をもう一度resolveするが、
+        // 展開済みの木に部品は無いので、根のキーを分けて「生きている部品の記録」を消し合わないようにする。
+        let wrapped = move || normalize(crate::react::resolve_root(id ^ 0x5a5a_5a5a_5a5a_5a5a, with_scope(scope, &render)));
         let app = App::mount(id, Box::new(wrapped) as Box<dyn Fn() -> VNode>);
         let kids = dom.children(&root);
         let adopted = kids.len() == 1 && matches_dom(&*dom, &kids[0], app.tree());
@@ -443,6 +446,7 @@ pub(crate) mod mem {
         fn create(&self, v: &VNode) -> N {
             match v {
                 VNode::Text(t) => Rc::new(RefCell::new(M { tag: None, text: t.clone(), attrs: BTreeMap::new(), kids: vec![] })),
+                VNode::Component(_) => Rc::new(RefCell::new(M { tag: None, text: String::new(), attrs: BTreeMap::new(), kids: vec![] })),
                 VNode::Element(e) => {
                     let n = el(&e.tag);
                     for (k, val) in &e.attrs {
@@ -530,6 +534,39 @@ mod tests {
         assert_eq!(html(&root), format!("<div><div><p>count=2</p><button data-rx-click=\"inc\">+</button></div></div>"));
         assert!(!rt.flush(), "状態が変わらなければ何もしない");
         crate::react::hooks::drop_instance(9002);
+    }
+
+
+    fn comp_counter(label: &String) -> VNode {
+        let (n, set) = use_state(|| 0i32);
+        let id = format!("inc-{label}");
+        let (k, v) = on_click(&id, move || set.update(|c| c + 1));
+        VNode::element("div")
+            .child(VNode::element("span").child(VNode::text(format!("{label}={n}"))).build())
+            .child(VNode::element("button").attr(k, v).child(VNode::text("+")).build())
+            .build()
+    }
+
+    #[test]
+    fn components_keep_independent_state_across_runtime_flushes() {
+        let d = Rc::new(MemDom);
+        let root = el("div");
+        let view = || {
+            VNode::element("main")
+                .child(VNode::component_keyed("a", comp_counter, "A".to_string()))
+                .child(VNode::component_keyed("b", comp_counter, "B".to_string()))
+                .build()
+        };
+        let mut rt = Runtime::mount(d.clone(), root.clone(), 9100, view);
+        assert!(dispatch_click("inc-A"));
+        assert!(rt.flush());
+        assert!(dispatch_click("inc-A"));
+        assert!(rt.flush());
+        assert!(dispatch_click("inc-B"));
+        assert!(rt.flush());
+        let h = html(&root);
+        assert!(h.contains("A=2") && h.contains("B=1"), "{h}");
+        crate::react::hooks::drop_instance(9100);
     }
 
     fn island_counter(props: &str) -> VNode {

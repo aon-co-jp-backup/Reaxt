@@ -22,15 +22,21 @@ fn safe_name(n: &str) -> bool {
     !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
 }
 
+/// 部品(`VNode::Component`)は自動idで展開してから出力し、終わったらその部品の状態を破棄する(要求ごとに新しい状態)。
 pub fn render(node: &VNode) -> String {
+    let resolved = crate::react::resolve_root(SSR_ROOT, node.clone());
     let mut out = String::new();
-    write(node, &mut out);
+    write(&resolved, &mut out);
+    crate::react::release_root(SSR_ROOT);
     out
 }
+
+const SSR_ROOT: u64 = u64::MAX;
 
 fn write(node: &VNode, out: &mut String) {
     match node {
         VNode::Text(t) => escape(t, out),
+        VNode::Component(_) => {} // renderが先に展開するので到達しない
         VNode::Element(el) => {
             // 不正なタグ名・属性名(注入の足場)は出力しない
             if !safe_name(&el.tag) {

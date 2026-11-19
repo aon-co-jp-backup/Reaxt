@@ -28,7 +28,7 @@ pub fn Fragment(children: impl IntoIterator<Item = VNode>) -> VNode {
 /// Preactの `cloneElement(vnode, props)`: 属性を足す/上書きした複製を返す(テキストはそのまま)。
 pub fn clone_element<'a>(v: &VNode, props: impl IntoIterator<Item = (&'a str, &'a str)>) -> VNode {
     match v {
-        VNode::Text(_) => v.clone(),
+        VNode::Text(_) | VNode::Component(_) => v.clone(),
         VNode::Element(el) => {
             let mut el = el.clone();
             for (k, val) in props {

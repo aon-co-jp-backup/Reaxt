@@ -86,6 +86,9 @@ mod boot {
     pub fn start() -> Result<(), JsValue> {
         // Portalのデモ: /portal では本体の外に #modal-root を作り、そこへ別の木を描く
         let loc = web_sys::window().and_then(|w| w.location().pathname().ok()).unwrap_or_default();
+        if loc == "/components" {
+            return reaxt::wasm::mount("#reaxt-root", 1, super::components_view).map(|_| ());
+        }
         if loc == "/portal" {
             let doc = web_sys::window().unwrap().document().unwrap();
             let div = doc.create_element("div")?;
@@ -137,5 +140,24 @@ pub fn modal_view() -> VNode {
         .child(VNode::element("span").attr("id", "sum").child(VNode::text(format!("sum={sum}"))).build())
         .child(VNode::element("span").attr("id", "runs").child(VNode::text(format!("runs={runs_shown}"))).build())
         .child(VNode::element("button").attr("id", "bump").attr(k, v).child(VNode::text("bump")).build())
+        .build()
+}
+
+/// v2 第1段のデモ: 部品(自動id)。同じ部品を2つ置いても状態は別、idを手書きしない。
+pub fn mini_counter(label: &String) -> VNode {
+    let (n, set) = use_state(|| 0i32);
+    let id = format!("inc-{label}");
+    let (k, v) = on_click(&id, move || set.update(|c| c + 1));
+    VNode::element("div")
+        .attr("class", "mini")
+        .child(VNode::element("span").attr("id", format!("n-{label}")).child(VNode::text(format!("{label}={n}"))).build())
+        .child(VNode::element("button").attr("id", id).attr(k, v).child(VNode::text("+")).build())
+        .build()
+}
+
+pub fn components_view() -> VNode {
+    VNode::element("main")
+        .child(VNode::component_keyed("a", mini_counter, "A".to_string()))
+        .child(VNode::component_keyed("b", mini_counter, "B".to_string()))
         .build()
 }

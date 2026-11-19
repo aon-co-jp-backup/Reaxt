@@ -17,6 +17,7 @@
 //! 「正しいが最適とは限らない」とされているのと同じ割り切り)。
 
 use crate::react::diff::diff;
+use crate::react::component::resolve_root;
 use crate::react::hooks::{any_dirty, clear_all_dirty, run_component, ComponentId};
 use crate::react::vnode::VNode;
 use crate::react::Patch;
@@ -39,7 +40,7 @@ impl<F: Fn() -> VNode> App<F> {
     /// `render_fn`を初回実行し、その結果を現在のツリーとして保持する
     /// (Reactの初回`render`相当、この時点ではdiff/patchは発生しない)。
     pub fn mount(root_id: ComponentId, render_fn: F) -> Self {
-        let tree = run_component(root_id, || render_fn());
+        let tree = run_component(root_id, || resolve_root(root_id, render_fn()));
         Self { root_id, render_fn, tree }
     }
 
@@ -60,7 +61,7 @@ impl<F: Fn() -> VNode> App<F> {
         // 丸ごと再レンダーする以上、個々のインスタンスのdirtyフラグを
         // 選別する必要は無い——まとめて消費する。
         clear_all_dirty();
-        let new_tree = run_component(self.root_id, || (self.render_fn)());
+        let new_tree = run_component(self.root_id, || resolve_root(self.root_id, (self.render_fn)()));
         let patch = diff(&self.tree, &new_tree);
         self.tree = new_tree;
         Some(patch)
@@ -69,7 +70,7 @@ impl<F: Fn() -> VNode> App<F> {
     /// dirtyかどうかに関わらず再レンダーして差分を返す(複数アプリ/アイランドが
     /// 共有するdirtyフラグを1つのアプリが消費しても、他が取りこぼさないために使う)。
     pub fn force_tick(&mut self) -> Patch {
-        let new_tree = run_component(self.root_id, || (self.render_fn)());
+        let new_tree = run_component(self.root_id, || resolve_root(self.root_id, (self.render_fn)()));
         let patch = diff(&self.tree, &new_tree);
         self.tree = new_tree;
         patch

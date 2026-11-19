@@ -35,6 +35,7 @@ impl Dom for WebDom {
     fn create(&self, v: &VNode) -> Node {
         match v {
             VNode::Text(t) => self.doc.create_text_node(t).into(),
+            VNode::Component(_) => self.doc.create_text_node("").into(), // 解決済みの木には現れない
             VNode::Element(e) => {
                 let el = match self.doc.create_element(&e.tag) {
                     Ok(el) => el,

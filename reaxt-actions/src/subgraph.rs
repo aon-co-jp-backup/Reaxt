@@ -410,14 +410,116 @@ struct Sel {
     on: Option<String>,
 }
 
-fn parse_selection(src: &str) -> Result<Vec<Sel>, String> {
+/// 選択の解釈に要るもの: 問い合わせ内の名前付きフラグメント(名前, 型, 本体)と変数。
+struct Env<'a> {
+    frags: Vec<(String, String, String)>,
+    vars: Option<&'a LightValue>,
+}
+
+/// `fragment 名前 on 型 { ... }` を問い合わせ全文から取り出す(波括弧の対応で本体を切る)。
+fn extract_fragments(q: &str) -> Vec<(String, String, String)> {
+    let b: Vec<char> = q.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 8 < b.len() {
+        let at_word = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == '_');
+        if at_word && b[i..].starts_with(&['f', 'r', 'a', 'g', 'm', 'e', 'n', 't']) && b[i + 8].is_whitespace() {
+            let mut j = i + 8;
+            let word = |j: &mut usize| -> String {
+                while *j < b.len() && b[*j].is_whitespace() {
+                    *j += 1;
+                }
+                let st = *j;
+                while *j < b.len() && (b[*j].is_ascii_alphanumeric() || b[*j] == '_') {
+                    *j += 1;
+                }
+                b[st..*j].iter().collect()
+            };
+            let name = word(&mut j);
+            let on = word(&mut j);
+            let ty = word(&mut j);
+            while j < b.len() && b[j] != '{' {
+                j += 1;
+            }
+            if on == "on" && !name.is_empty() && j < b.len() {
+                let st = j + 1;
+                let mut d = 0;
+                while j < b.len() {
+                    match b[j] {
+                        '{' => d += 1,
+                        '}' => {
+                            d -= 1;
+                            if d == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if j < b.len() {
+                    out.push((name, ty, b[st..j].iter().collect()));
+                }
+            }
+            i = j.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// `@skip(if: ..)` / `@include(if: ..)` を読み、残すなら true。値は true / false / `$変数`。
+fn parse_directives(b: &[char], i: &mut usize, env: &Env) -> Result<bool, String> {
+    let mut keep = true;
+    loop {
+        while *i < b.len() && b[*i].is_whitespace() {
+            *i += 1;
+        }
+        if b.get(*i) != Some(&'@') {
+            return Ok(keep);
+        }
+        *i += 1;
+        let st = *i;
+        while *i < b.len() && b[*i].is_ascii_alphanumeric() {
+            *i += 1;
+        }
+        let name: String = b[st..*i].iter().collect();
+        if name != "skip" && name != "include" {
+            return Err(format!("ディレクティブ @{name} は未対応です(@skip / @include のみ)"));
+        }
+        while *i < b.len() && b[*i].is_whitespace() {
+            *i += 1;
+        }
+        if b.get(*i) != Some(&'(') {
+            return Err("ディレクティブに ( がありません".into());
+        }
+        let st = *i + 1;
+        while *i < b.len() && b[*i] != ')' {
+            *i += 1;
+        }
+        let arg: String = b[st..(*i).min(b.len())].iter().collect();
+        *i += 1;
+        let val = arg.trim().strip_prefix("if").map(str::trim_start).and_then(|x| x.strip_prefix(':')).map(str::trim).ok_or("if: 値 の形だけ対応です")?;
+        let cond = match val {
+            "true" => true,
+            "false" => false,
+            v => env.vars.and_then(|vs| vs.get(v.strip_prefix('$')?)).and_then(|x| x.as_bool()).ok_or("if: の変数が真偽値で渡されていません")?,
+        };
+        if (name == "skip" && cond) || (name == "include" && !cond) {
+            keep = false;
+        }
+    }
+}
+
+fn parse_selection(src: &str, env: &Env) -> Result<Vec<Sel>, String> {
     let b: Vec<char> = src.chars().collect();
     let mut i = 0;
-    let v = parse_sel_list(&b, &mut i, 0)?;
+    let v = parse_sel_list(&b, &mut i, 0, env)?;
     Ok(v)
 }
 
-fn parse_sel_list(b: &[char], i: &mut usize, depth: usize) -> Result<Vec<Sel>, String> {
+fn parse_sel_list(b: &[char], i: &mut usize, depth: usize, env: &Env) -> Result<Vec<Sel>, String> {
     if depth > 16 {
         return Err("選択の入れ子が深すぎます".into());
     }
@@ -445,23 +547,39 @@ fn parse_sel_list(b: &[char], i: &mut usize, depth: usize) -> Result<Vec<Sel>, S
         if b[*i..].starts_with(&['.', '.', '.']) {
             *i += 3;
             ws(i);
-            let kw = ident(i);
-            if kw != "on" {
-                return Err("`... on 型 { }` の形だけ対応です(フラグメント名は未対応)".into());
+            // `... on 型 { }` / `... @dir { }`(型なし) / `...名前`(名前付きフラグメント)
+            let kw = if b.get(*i) == Some(&'@') || b.get(*i) == Some(&'{') { String::new() } else { ident(i) };
+            if kw.is_empty() || kw == "on" {
+                let ty = if kw == "on" {
+                    ws(i);
+                    ident(i)
+                } else {
+                    "*".to_string()
+                };
+                let keep = parse_directives(b, i, env)?;
+                ws(i);
+                if b.get(*i) != Some(&'{') {
+                    return Err("`...` の後に { がありません".into());
+                }
+                *i += 1;
+                let children = parse_sel_list(b, i, depth + 1, env)?;
+                if b.get(*i) != Some(&'}') {
+                    return Err("選択が閉じていません".into());
+                }
+                *i += 1;
+                if keep {
+                    out.push(Sel { alias: String::new(), name: "...".into(), children, on: Some(ty) });
+                }
+            } else {
+                let keep = parse_directives(b, i, env)?;
+                let (_, ty, body) = env.frags.iter().find(|(n, _, _)| *n == kw).cloned().ok_or_else(|| format!("フラグメント {kw} が見つかりません"))?;
+                if keep {
+                    let bb: Vec<char> = body.chars().collect();
+                    let mut k = 0;
+                    let children = parse_sel_list(&bb, &mut k, depth + 1, env)?;
+                    out.push(Sel { alias: String::new(), name: "...".into(), children, on: Some(ty) });
+                }
             }
-            ws(i);
-            let ty = ident(i);
-            ws(i);
-            if b.get(*i) != Some(&'{') {
-                return Err("`... on 型` の後に { がありません".into());
-            }
-            *i += 1;
-            let children = parse_sel_list(b, i, depth + 1)?;
-            if b.get(*i) != Some(&'}') {
-                return Err("選択が閉じていません".into());
-            }
-            *i += 1;
-            out.push(Sel { alias: String::new(), name: "...".into(), children, on: Some(ty) });
             continue;
         }
         let first = ident(i);
@@ -496,16 +614,20 @@ fn parse_sel_list(b: &[char], i: &mut usize, depth: usize) -> Result<Vec<Sel>, S
             }
             ws(i);
         }
+        let keep = parse_directives(b, i, env)?;
+        ws(i);
         let mut children = Vec::new();
         if b.get(*i) == Some(&'{') {
             *i += 1;
-            children = parse_sel_list(b, i, depth + 1)?;
+            children = parse_sel_list(b, i, depth + 1, env)?;
             if b.get(*i) != Some(&'}') {
                 return Err("選択が閉じていません".into());
             }
             *i += 1;
         }
-        out.push(Sel { alias, name, children, on: None });
+        if keep {
+            out.push(Sel { alias, name, children, on: None });
+        }
     }
 }
 
@@ -535,7 +657,7 @@ fn project(v: &LightValue, ty: &GqlType, sel: &[Sel]) -> String {
 fn project_into(v: &LightValue, tname: &str, fields: &[(&'static str, GqlType)], sel: &[Sel], parts: &mut Vec<String>) {
     for s in sel {
         if let Some(on) = &s.on {
-            if on == tname {
+            if on == "*" || on == tname {
                 project_into(v, tname, fields, &s.children, parts);
             }
             continue;
@@ -554,23 +676,23 @@ fn project_into(v: &LightValue, tname: &str, fields: &[(&'static str, GqlType)],
 }
 
 /// 応答(`call` の本文)を、フィールドの出力型と選択に従って整える。型を持たない出力(`JSON`)はそのまま。
-fn shape_output(path: &str, raw: &str, sel: Option<&str>) -> Result<String, String> {
+fn shape_output(path: &str, raw: &str, sel: Option<&str>, env: &Env) -> Result<String, String> {
     let (Some(ty), Some(sel)) = (output_of(path), sel) else { return Ok(raw.to_string()) };
     if ty == GqlType::Json {
         return Ok(raw.to_string());
     }
-    let sels = parse_selection(sel)?;
+    let sels = parse_selection(sel, env)?;
     let v = parse_light_secure(raw, &LightLimits::small()).map_err(|e| e.to_string())?;
     Ok(project(&v, &ty, &sels))
 }
 
 /// `_entities(representations: [...])`: 表現ごとに、型に登録されたアクションで解決し、選択で射影する。
-fn resolve_entities(r: &Root, vars: Option<&LightValue>, call: &dyn Fn(&str, &str) -> (u16, String)) -> Result<String, String> {
+fn resolve_entities(r: &Root, vars: Option<&LightValue>, env: &Env, call: &dyn Fn(&str, &str) -> (u16, String)) -> Result<String, String> {
     let rest = r.args.strip_prefix("representations").map(str::trim_start).and_then(|x| x.strip_prefix(':')).ok_or("_entities には representations 引数が必要です")?;
     let reps_json = gql_value_to_json(rest.trim(), vars)?;
     let reps = parse_light_secure(&reps_json, &LightLimits::small()).map_err(|e| e.to_string())?;
     let reps = reps.as_array().ok_or("representations は配列です")?;
-    let sels = parse_selection(r.sel.as_deref().unwrap_or(""))?;
+    let sels = parse_selection(r.sel.as_deref().unwrap_or(""), env)?;
     let ents = registry().entities.clone();
     let mut out = Vec::new();
     for rep in reps {
@@ -629,6 +751,7 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
         Ok(r) => r,
         Err(e) => return (200, format!("{{\"data\":null,\"errors\":[{}]}}", gql_error(&e, "invalid_argument", 400))),
     };
+    let env = Env { frags: extract_fragments(query), vars };
     let mut data = Vec::new();
     let mut errors = Vec::new();
     for r in roots {
@@ -641,7 +764,7 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
             continue;
         }
         if r.field == "_entities" {
-            match resolve_entities(&r, vars, call) {
+            match resolve_entities(&r, vars, &env, call) {
                 Ok(j) => data.push(format!("{}:{j}", quote_json(&r.alias))),
                 Err(e) => {
                     errors.push(gql_error(&e, "invalid_argument", 400));
@@ -682,7 +805,7 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
         };
         let (status, out) = call(path, &input);
         if status == 200 {
-            match shape_output(path, &out, r.sel.as_deref()) {
+            match shape_output(path, &out, r.sel.as_deref(), &env) {
                 Ok(shaped) => data.push(format!("{}:{}", quote_json(&r.alias), shaped)),
                 Err(e) => {
                     errors.push(gql_error(&e, "invalid_argument", 400));
@@ -802,6 +925,19 @@ mod tests {
     #[derive(Debug)]
     struct Ent { id: String, n: u32 }
     crate::wire_struct!(Ent { id: String, n: u32 });
+
+    #[test]
+    fn named_fragments_and_directives_in_selection() {
+        register_output("/t.v1.E/GetEnt", <Ent as crate::Wire>::gql_type());
+        let p = vec!["/t.v1.E/GetEnt".to_string()];
+        let call = |_: &str, _: &str| (200u16, "{\"id\":\"x\",\"n\":7}".to_string());
+        let q = |x: bool| format!("{{\"query\":\"query($x:Boolean!){{ t_v1_E_GetEnt {{ id ...F @include(if:$x) }} }} fragment F on Ent {{ n }}\",\"variables\":{{\"x\":{x}}}}}");
+        assert!(execute(&q(true), &p, &call).1.contains("{\"id\":\"x\",\"n\":7}"));
+        let (_, o) = execute(&q(false), &p, &call);
+        assert!(o.contains("{\"id\":\"x\"}") && !o.contains("\"n\""), "{o}");
+        let q3 = "{\"query\":\"{ t_v1_E_GetEnt { id n @skip(if: true) ... @include(if: true) { n } } }\"}";
+        assert!(execute(q3, &p, &call).1.contains("{\"id\":\"x\",\"n\":7}"));
+    }
 
     #[test]
     fn option_is_nullable_and_round_trips() {

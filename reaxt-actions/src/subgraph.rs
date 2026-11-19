@@ -181,6 +181,21 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
     if query.contains("_service") {
         return (200, format!("{{\"data\":{{\"_service\":{{\"sdl\":{}}}}}}}", quote_json(&sdl(paths))));
     }
+    // open-cosmo のゲートウェイは、ルートのフィールド名をこの問い合わせで探す(`remote_subgraphs.rs`)。
+    // 型や引数までは返さない最小の応答(`queryType`/`mutationType` の `fields { name }` だけ)。
+    if query.contains("__schema") {
+        let muts: Vec<String> = paths
+            .iter()
+            .filter_map(|p| p.strip_prefix('/').and_then(|x| x.rsplit_once('/')).map(|(s, m)| format!("{{\"name\":{}}}", quote_json(&field_name(s, m)))))
+            .collect();
+        return (
+            200,
+            format!(
+                "{{\"data\":{{\"__schema\":{{\"queryType\":{{\"fields\":[{{\"name\":\"reaxt_ready\"}}]}},\"mutationType\":{{\"fields\":[{}]}}}}}}}}",
+                muts.join(",")
+            ),
+        );
+    }
     if query.contains("reaxt_ready") && !query.contains("mutation") {
         return (200, "{\"data\":{\"reaxt_ready\":true}}".into());
     }
@@ -260,6 +275,15 @@ mod tests {
         assert!(out.contains("\"x\":{\"echo\":{\"by\":3}}"), "{out}");
         assert!(out.contains("\"demo_v1_Counter_Fail\":null"), "{out}");
         assert!(out.contains("permission_denied"), "{out}");
+    }
+
+    #[test]
+    fn answers_the_minimal_introspection_the_open_cosmo_gateway_uses() {
+        let q = "{\"query\":\"{ __schema { queryType { fields { name } } mutationType { fields { name } } } }\"}";
+        let (st, out) = execute(q, &paths(), &fake);
+        assert_eq!(st, 200);
+        assert!(out.contains("\"queryType\":{\"fields\":[{\"name\":\"reaxt_ready\"}]}"), "{out}");
+        assert!(out.contains("\"mutationType\":{\"fields\":[{\"name\":\"demo_v1_Counter_Add\"}"), "{out}");
     }
 
     #[test]

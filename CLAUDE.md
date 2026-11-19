@@ -108,3 +108,9 @@ Rust だけで書くフロント+バックエンド統合の枠組み。RPoem(�
 
 ## 3姉妹リポジトリ(2026-11-19、常に同時開発)
 Reaxt / [`RPoRea`](https://github.com/aon-co-jp/RPoRea)(RPoem+Reaxtの融合、新設)/ [`open-cosmo`](https://github.com/aon-co-jp/open-cosmo)(WunderGraph Cosmo相当。GitHub上の正式名称は`open-cosmo`と確認済み)。接点(サブグラフ形式・manifest・Connect・`x-reaxt`)を変えたら3つのCLAUDE.mdを同じ日に更新する。約束と接点の現状は RPoRea の `docs/THREE-SISTERS.md`。最優先の未了は、open-cosmo のルーターへ Reaxt のサブグラフを実際に合成させる確認。
+
+## 2026-11-19 前提(ユーザー指示): 開発中の Rust 版 HTML5+CSS3+TypeScript と一緒に使う想定
+- RPoem・Reaxt・RPoRea は基本 **Rust から**使い、Web サイト・Web アプリ・アプリを作る。開発中の **Rust 版 HTML5+CSS3+TypeScript**(`rhtml5`・`rcss3`・`RS-TypeScript`、JS 実行エンジン `RS-JavaScript` は雛形)と一緒に使う想定で設計・実装する。
+- 方針: HTML5/CSS3 の使用量は極力少なく / tokio と WASM は適材適所 / REST は使わない(Connect・gRPC) / JavaScript の Rust 版も進めるが **TypeScript の Rust 版を優先**。
+- 部品ごとの現状とつなぎ方の想定は `RPoRea/docs/WEB-STACK.md`(2026-11-19 調査: `RS-TypeScript` は本日拡張し Node で実行確認、`rhtml5` はトークナイザのみ、`rcss3` はパーサー+カスケード、`RS-JavaScript` は雛形)。
+- README/CLAUDE/PORTING は更新のたびに 10 か国語で(ネイティブに近い自然さ、IT・Web に詳しい人が一般の人にも親切に)。この追記の10言語版は `RPoRea` の各文書にある。

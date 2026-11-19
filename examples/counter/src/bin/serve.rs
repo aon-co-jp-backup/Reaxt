@@ -20,13 +20,28 @@ fn main() {
     let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let (c_page, c_act, c_get) = (counter.clone(), counter.clone(), counter.clone());
     const COUNT_GET: reaxt_actions::Action<(), u32> = reaxt_actions::Action::new("demo.v1.Counter", "GetCount");
+    // 同じ型名 `Visitor` を別フィールド(count)で足す(Cosmoが @key で greeter 側と結合する)
+    #[derive(Debug)]
+    struct VKey {
+        id: String,
+    }
+    reaxt_actions::wire_struct!(VKey { id: String });
+    #[derive(Debug)]
+    struct Visitor {
+        id: String,
+        count: u32,
+    }
+    reaxt_actions::wire_struct!(Visitor { id: String, count: u32 });
+    const VISITOR: reaxt_actions::Action<VKey, Visitor> = reaxt_actions::Action::new("demo.v1.Counter", "GetVisitor");
+    let c_ent = counter.clone();
     let app = App::new("Reaxt counter")
         .global_guard(reaxt_actions::csrf_guard)
         .module(
             reaxt::backend::Module::new()
                 .action(&reaxt_counter::INC, move |_, _: ()| Ok(c_act.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1))
                 // `Get*` は GraphQL の Query として公開される(読み取り用。Cosmo の分割試験に使う)
-                .action(&COUNT_GET, move |_, _: ()| Ok(c_get.load(std::sync::atomic::Ordering::SeqCst))),
+                .action(&COUNT_GET, move |_, _: ()| Ok(c_get.load(std::sync::atomic::Ordering::SeqCst)))
+                .entity(&VISITOR, move |_, k: VKey| Ok(Visitor { id: k.id, count: c_ent.load(std::sync::atomic::Ordering::SeqCst) })),
         )
         .page("actions.rs", RenderMode::Islands, move |_| {
             reaxt_counter::actions_page(c_page.load(std::sync::atomic::Ordering::SeqCst))

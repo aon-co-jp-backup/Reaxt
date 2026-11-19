@@ -149,7 +149,7 @@ macro_rules! wire_int {
         }
     )*};
 }
-wire_int!(u8, u16, u32, i32, i64, usize);
+wire_int!(u8, u16, u32, u64, i8, i16, i32, i64, usize, isize);
 impl Wire for f64 {
     fn to_wire(&self) -> String {
         // JSONは NaN / 無限大を表せないので null にする
@@ -358,6 +358,15 @@ mod tests {
         assert_eq!(f64::NAN.to_wire(), "null");
         assert!(decode::<f64>("\"x\"").is_err());
         assert_eq!(<f64 as Wire>::gql_type(), GqlType::Float);
+    }
+
+    #[test]
+    fn more_integer_types_round_trip_and_reject_out_of_range() {
+        assert_eq!(decode::<u64>("42").unwrap(), 42);
+        assert_eq!(decode::<i8>("-5").unwrap(), -5);
+        assert!(decode::<i8>("300").is_err());
+        assert!(decode::<u64>("-1").is_err());
+        assert_eq!(7isize.to_wire(), "7");
     }
 
     #[test]

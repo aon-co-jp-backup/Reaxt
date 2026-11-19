@@ -66,3 +66,45 @@ mod tests {
 pub fn to_document(chunks: &[String]) -> String {
     format!("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>{}</body></html>", chunks.concat())
 }
+
+// ───── 非同期ストリーミング(本物の遅延を待つ) ─────
+//
+// 設計: シェル(fallback入り)は**何も待たずに最初に送る**。各境界は別々のFutureで、**終わった順**に差し替えを送る
+// (順不同)。各境界には必ず期限があり、超えたら `on_timeout` の内容で差し替える(遅い1つが全体を止めない)。
+// 実行(spawn・チャネル・送出)はホスト(`reaxt-rpoem` など)の責務で、このクレートは非同期ランタイムに依存しない。
+
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+
+pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+
+/// 既定の期限(1境界あたり)。
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 遅れて解決する1か所。`slot(i, ..)` の `i` は並びの位置と一致させる。
+pub struct AsyncPending {
+    pub fut: BoxFuture<VNode>,
+    pub timeout: Duration,
+    /// 期限を超えた時に差し替える内容。
+    pub on_timeout: VNode,
+}
+
+impl AsyncPending {
+    pub fn new(fut: impl Future<Output = VNode> + Send + 'static) -> Self {
+        AsyncPending { fut: Box::pin(fut), timeout: DEFAULT_TIMEOUT, on_timeout: VNode::text("") }
+    }
+    pub fn timeout(mut self, d: Duration, on_timeout: VNode) -> Self {
+        self.timeout = d;
+        self.on_timeout = on_timeout;
+        self
+    }
+}
+
+/// ホストへ渡す非同期ストリーム: `head`(文書の頭+シェル)を先に送り、`pendings` を並行に走らせ、終わった順に
+/// `resolved_chunk(i, ..)` を送り、最後に `tail` を送る。
+pub struct AsyncStream {
+    pub head: String,
+    pub pendings: Vec<AsyncPending>,
+    pub tail: String,
+}

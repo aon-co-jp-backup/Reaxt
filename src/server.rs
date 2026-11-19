@@ -36,12 +36,18 @@ fn handle(app: &App, mut conn: TcpStream) -> std::io::Result<()> {
         .and_then(|(_, v)| v.parse().ok())
         .unwrap_or(0);
     let r = if len > crate::backend::MAX_BODY {
-        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], bytes: None, chunks: None, body: "too large".into() }
+        crate::app::Response { status: 413, content_type: "text/plain; charset=utf-8", headers: vec![], bytes: None, chunks: None, streaming: None, body: "too large".into() }
     } else {
         let mut buf = vec![0u8; len];
         rd.read_exact(&mut buf)?;
         let body = String::from_utf8_lossy(&buf).into_owned();
-        app.dispatch(&crate::app::Request { method: &method, path: &target, headers: &headers, body: &body })
+        let r = app.dispatch(&crate::app::Request { method: &method, path: &target, headers: &headers, body: &body });
+        if r.streaming.is_some() {
+            // 同期ホストは非同期ストリーミングを駆動できない(待てない)ので、黙って未解決のまま返さず501にする
+            crate::app::Response { status: 501, content_type: "text/plain; charset=utf-8", headers: vec![], bytes: None, chunks: None, streaming: None, body: "async streaming needs an async host (reaxt-rpoem)".into() }
+        } else {
+            r
+        }
     };
     let reason = match r.status {
         200 => "OK",

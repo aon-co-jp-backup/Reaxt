@@ -226,7 +226,7 @@ pub fn install(app: App) -> App {
     let paths = app.method_paths();
     let g: Gateway = Arc::new(move |req: &Request, call: &dyn Fn(&str, &str) -> (u16, String)| {
         let (status, body) = execute(req.body, &paths, call);
-        Response { status, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, chunks: None, body }
+        Response { status, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, chunks: None, streaming: None, body }
     });
     app.gateway(PATH, g)
 }

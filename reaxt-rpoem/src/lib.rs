@@ -50,7 +50,7 @@ pub fn route(app: Arc<App>) -> Route {
     }
     r = r.at("/_reaxt/manifest.json", get(host_handler(app.clone())));
     // ストリーミングSSRのページ(GET)
-    for p in app.stream_paths() {
+    for p in app.stream_paths().into_iter().chain(app.async_stream_paths()) {
         r = r.at(&p, get(host_handler(app.clone())));
     }
     r
@@ -80,6 +80,52 @@ impl http_body::Body for Chunks {
 fn chunked_body(parts: Vec<String>) -> open_runo_poem_compat::hyper_compat::Body {
     use http_body_util::BodyExt;
     Chunks(parts.into_iter().map(|s| bytes_like::Bytes::from(s.into_bytes())).collect()).boxed()
+}
+
+
+/// 受信側がチャネルから1つずつ取り出して送るボディ(送り手が閉じたら終わり)。
+struct ChannelBody(tokio::sync::mpsc::Receiver<String>);
+
+impl http_body::Body for ChannelBody {
+    type Data = bytes_like::Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        self.0.poll_recv(cx).map(|o| o.map(|s| Ok(http_body::Frame::data(bytes_like::Bytes::from(s.into_bytes())))))
+    }
+}
+
+/// 非同期ストリーミング: シェルを**待たずに最初に送り**、各境界を並行に走らせ、**終わった順**に差し替えを送る。
+/// 各境界は期限つき(超えたら `on_timeout` で差し替え)。クライアントが切れたら残りの処理を中止する。
+fn async_body(s: reaxt::stream::AsyncStream) -> open_runo_poem_compat::hyper_compat::Body {
+    use http_body_util::BodyExt;
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(16);
+    tokio::spawn(async move {
+        if tx.send(s.head).await.is_err() {
+            return;
+        }
+        let mut set = tokio::task::JoinSet::new();
+        for (i, p) in s.pendings.into_iter().enumerate() {
+            let tx = tx.clone();
+            set.spawn(async move {
+                let node = match tokio::time::timeout(p.timeout, p.fut).await {
+                    Ok(v) => v,
+                    Err(_) => p.on_timeout,
+                };
+                let _ = tx.send(reaxt::stream::resolved_chunk(i, &node)).await;
+            });
+        }
+        loop {
+            tokio::select! {
+                _ = tx.closed() => { set.abort_all(); return; }
+                r = set.join_next() => if r.is_none() { break },
+            }
+        }
+        let _ = tx.send(s.tail).await;
+    });
+    ChannelBody(rx).boxed()
 }
 
 fn host_handler(app: Arc<App>) -> open_runo_poem_compat::Handler {
@@ -112,10 +158,11 @@ fn host_handler(app: Arc<App>) -> open_runo_poem_compat::Handler {
             for (k, v) in &res.headers {
                 b = b.header(k.as_str(), v.as_str());
             }
-            let body = match (res.chunks, res.bytes) {
-                (Some(parts), _) => chunked_body(parts),
-                (None, Some(v)) => hyper_compat::fixed_body(v.into()),
-                (None, None) => hyper_compat::fixed_body(res.body.into()),
+            let body = match (res.streaming, res.chunks, res.bytes) {
+                (Some(s), _, _) => async_body(s),
+                (None, Some(parts), _) => chunked_body(parts),
+                (None, None, Some(v)) => hyper_compat::fixed_body(v.into()),
+                (None, None, None) => hyper_compat::fixed_body(res.body.into()),
             };
             b.body(body).unwrap_or_else(|_| {
                 open_runo_poem_compat::empty_status(open_runo_poem_compat::StatusCode::INTERNAL_SERVER_ERROR)
@@ -210,6 +257,85 @@ mod tests {
         assert!(t.find("wait").unwrap() < t.find("<template").unwrap(), "シェルが先、差し替えが後");
     }
 
+    /// 実TCPで時刻つきに読む: 各フレーム(チャンク)の到着時刻を記録する。
+    async fn read_timed(addr: std::net::SocketAddr, path: &str) -> Vec<(std::time::Duration, String)> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let t0 = std::time::Instant::now();
+        let mut acc = String::new();
+        let mut out: Vec<(std::time::Duration, String)> = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = s.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            let piece = String::from_utf8_lossy(&buf[..n]).into_owned();
+            acc.push_str(&piece);
+            out.push((t0.elapsed(), piece));
+        }
+        let _ = acc;
+        out
+    }
+
+    #[tokio::test]
+    async fn async_stream_sends_shell_first_then_out_of_order_and_times_out() {
+        use reaxt::stream::{slot, AsyncPending};
+        use std::time::Duration;
+        let app = Arc::new(
+            App::new("as")
+                .stream_async(
+                    "/live",
+                    Arc::new(|| {
+                        let shell = VNode::element("main")
+                            .child(slot(0, VNode::text("wait0")))
+                            .child(slot(1, VNode::text("wait1")))
+                            .child(slot(2, VNode::text("wait2")))
+                            .build();
+                        let p = vec![
+                            // 0: 遅い(400ms)、1: 速い(50ms)、2: 期限(100ms)を超える(5秒かかる)
+                            AsyncPending::new(async {
+                                tokio::time::sleep(Duration::from_millis(400)).await;
+                                VNode::text("slow0")
+                            }),
+                            AsyncPending::new(async {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                VNode::text("fast1")
+                            }),
+                            AsyncPending::new(async {
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                                VNode::text("never2")
+                            })
+                            .timeout(Duration::from_millis(100), VNode::text("timeout2")),
+                        ];
+                        (shell, p)
+                    }),
+                )
+                .finish(),
+        );
+        let (addr, _h) = open_runo_poem_compat::Server::new(open_runo_poem_compat::TcpListener::bind(([127, 0, 0, 1], 0)))
+            .run(route(app))
+            .await
+            .unwrap();
+        let frames = read_timed(addr, "/live").await;
+        let all: String = frames.iter().map(|(_, s)| s.as_str()).collect();
+        // 1) シェルは何も待たずに先に届く(最初のフレームに fallback が入り、差し替えはまだ無い)
+        let first = &frames[0];
+        assert!(first.0 < Duration::from_millis(40), "シェルが遅れた: {:?}", first.0);
+        assert!(first.1.contains("wait0") && !first.1.contains("<template"), "{}", first.1);
+        // 2) 終わった順(順不同): fast1 → timeout2 → slow0
+        let p = |needle: &str| all.find(needle).unwrap_or_else(|| panic!("{needle} が無い: {all}"));
+        assert!(p("fast1") < p("timeout2") && p("timeout2") < p("slow0"), "{all}");
+        // 3) 期限超過の境界は5秒待たず、全体は400ms前後で終わる(遅い1つが全体を止めない)
+        let total = frames.last().unwrap().0;
+        assert!(total < Duration::from_millis(1500), "全体が遅い: {total:?}");
+        assert!(!all.contains("never2") && all.ends_with("0\r\n\r\n"), "{all}");
+        // 4) 各差し替えは、解決した時刻に届く(まとめて最後に来ない)
+        let t_fast = frames.iter().find(|(_, s)| s.contains("fast1")).unwrap().0;
+        assert!(t_fast < Duration::from_millis(300), "fast1 が遅れて届いた: {t_fast:?}");
+    }
+
     #[tokio::test]
     async fn gateway_and_manifest_over_rpoem() {
         use reaxt::app::Response;
@@ -222,7 +348,7 @@ mod tests {
                         status: 200,
                         content_type: "application/json; charset=utf-8",
                         headers: vec![],
-                        bytes: None, chunks: None,
+                        bytes: None, chunks: None, streaming: None,
                         body: "{\"ok\":true}".to_string(),
                     }),
                 )

@@ -13,7 +13,8 @@ open-runo-poem-compat = { path = "../../RPoem/crates/open-runo-poem-compat" }
 hyper = "1"
 http-body-util = "0.1"
 http-body = "1"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 bytes_like = { package = "bytes", version = "1" }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

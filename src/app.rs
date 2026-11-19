@@ -16,6 +16,8 @@ pub struct Response {
     pub bytes: Option<Vec<u8>>,
     /// ストリーミング応答のチャンク列。Someならホストは順に送れる(結合すると`body`と同じ)。
     pub chunks: Option<Vec<String>>,
+    /// 非同期ストリーミング(本物の遅延を待つ)。Someなら、ホストは `body`/`chunks` ではなくこちらを駆動する。
+    pub streaming: Option<crate::stream::AsyncStream>,
 }
 
 /// Nuxtの`routeRules`相当: パス接頭辞ごとの上書き。`/`終わりでなければ完全一致または`/`区切りの接頭辞。
@@ -63,11 +65,14 @@ pub struct App {
     gateways: Vec<(String, Gateway)>,
     /// ストリーミングSSRのページ(`GET path`)。チャンク列(`stream::chunks`の結果)を返す関数。
     streams: Vec<(String, StreamPage)>,
+    async_streams: Vec<(String, AsyncStreamPage)>,
 }
 
 /// 外部連携の入口: (リクエスト, Connectメソッド呼び出し関数) → 応答。
 /// ストリーミングページ: チャンク列を返す関数。
 pub type StreamPage = std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+/// 非同期ストリーミングページ: (シェル, 遅れて解決する各境界)を返す関数。`slot(i, fallback)` をシェルに置き、`pendings[i]` と対応させる。
+pub type AsyncStreamPage = std::sync::Arc<dyn Fn() -> (VNode, Vec<crate::stream::AsyncPending>) + Send + Sync>;
 
 pub type Gateway = std::sync::Arc<dyn Fn(&Request, &dyn Fn(&str, &str) -> (u16, String)) -> Response + Send + Sync>;
 
@@ -160,6 +165,38 @@ impl App {
         self
     }
 
+    /// 非同期ストリーミングページを登録する(`GET path`)。シェルは待たずに先に送り、各境界は終わった順に差し替える。
+    /// 非同期のホスト(`reaxt-rpoem`)が必要。同期ホスト(`server`)は501を返す。
+    pub fn stream_async(mut self, path: &str, f: AsyncStreamPage) -> Self {
+        self.async_streams.push((path.to_string(), f));
+        self
+    }
+
+    /// 非同期ストリーミングページのパス一覧(ホスト側のルート登録用)。
+    pub fn async_stream_paths(&self) -> Vec<String> {
+        self.async_streams.iter().map(|(p, _)| p.clone()).collect()
+    }
+
+    fn async_stream_response(&self, f: &AsyncStreamPage) -> Response {
+        let (shell, pendings) = f();
+        let mut t = String::new();
+        ssr::escape(&self.title, &mut t);
+        let head = &self.head;
+        let head = format!("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t}</title>{head}</head><body data-reaxt-mode=\"Ssr\">{}", ssr::render(&shell));
+        let tail = "</body></html>".to_string();
+        // 同期ホスト向けの退避: 差し替え前(fallback入り)の文書。非同期ホストは `streaming` を使う。
+        let body = format!("{head}{tail}");
+        Response {
+            status: 200,
+            content_type: "text/html; charset=utf-8",
+            headers: vec![("cache-control".into(), "no-store".into())],
+            bytes: None,
+            body,
+            chunks: None,
+            streaming: Some(crate::stream::AsyncStream { head, pendings, tail }),
+        }
+    }
+
     /// ストリーミングページのパス一覧(ホスト側のルート登録用)。
     pub fn stream_paths(&self) -> Vec<String> {
         self.streams.iter().map(|(p, _)| p.clone()).collect()
@@ -176,7 +213,7 @@ impl App {
         parts.push(format!("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t}</title>{head}</head><body data-reaxt-mode=\"Ssr\">{shell}"));
         parts.extend(it);
         parts.push("</body></html>".to_string());
-        Response { status: 200, content_type: "text/html; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, body: parts.concat(), chunks: Some(parts) }
+        Response { status: 200, content_type: "text/html; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, body: parts.concat(), chunks: Some(parts), streaming: None }
     }
 
     /// 外部連携の入口(`POST`)のパス一覧(ホスト側のルート登録用)。
@@ -202,9 +239,12 @@ impl App {
     pub fn dispatch(&self, req: &Request) -> Response {
         let bare = req.path.split(['?', '#']).next().unwrap_or("");
         if req.method == "GET" && bare == "/_reaxt/manifest.json" {
-            return Response { status: 200, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, chunks: None, body: self.manifest() };
+            return Response { status: 200, content_type: "application/json; charset=utf-8", headers: vec![("cache-control".into(), "no-store".into())], bytes: None, chunks: None, streaming: None, body: self.manifest() };
         }
         if req.method == "GET" {
+            if let Some((_, f)) = self.async_streams.iter().find(|(p, _)| p == bare) {
+                return self.async_stream_response(f);
+            }
             if let Some((_, f)) = self.streams.iter().find(|(p, _)| p == bare) {
                 return self.stream_response(f);
             }
@@ -220,7 +260,7 @@ impl App {
                 status,
                 content_type: "application/json; charset=utf-8",
                 headers: vec![("cache-control".into(), "no-store".into())],
-                bytes: None, chunks: None,
+                bytes: None, chunks: None, streaming: None,
                 body: json,
             };
         }
@@ -237,21 +277,21 @@ impl App {
             }
         }
         if req.method != "GET" && req.method != "HEAD" {
-            return Response { status: 405, content_type: "text/plain; charset=utf-8", headers, bytes: None, chunks: None, body: "method not allowed".into() };
+            return Response { status: 405, content_type: "text/plain; charset=utf-8", headers, bytes: None, chunks: None, streaming: None, body: "method not allowed".into() };
         }
         if let Some((_, ct, bytes)) = self.assets.iter().find(|(p, _, _)| p == path) {
-            return Response { status: 200, content_type: ct, headers, bytes: Some(bytes.clone()), chunks: None, body: String::new() };
+            return Response { status: 200, content_type: ct, headers, bytes: Some(bytes.clone()), chunks: None, streaming: None, body: String::new() };
         }
         for (route, page) in &self.pages {
             if let Some(params) = matches(route, path) {
                 let mode = rule.and_then(|r| r.mode).unwrap_or(route.mode);
                 crate::hydrate::reset_islands();
                 let tree = page(&params);
-                return Response { status: 200, content_type: "text/html; charset=utf-8", headers, bytes: None, chunks: None, body: self.document(mode, &tree) };
+                return Response { status: 200, content_type: "text/html; charset=utf-8", headers, bytes: None, chunks: None, streaming: None, body: self.document(mode, &tree) };
             }
         }
         let nf = VNode::element("h1").child(VNode::text("404 Not Found")).build();
-        Response { status: 404, content_type: "text/html; charset=utf-8", headers, bytes: None, chunks: None, body: self.document(RenderMode::Ssr, &nf) }
+        Response { status: 404, content_type: "text/html; charset=utf-8", headers, bytes: None, chunks: None, streaming: None, body: self.document(RenderMode::Ssr, &nf) }
     }
 
     /// 公開しているConnectメソッドの一覧(JS/TS・Cosmo連携が読む)。

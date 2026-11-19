@@ -26,9 +26,11 @@ fn main() {
     }
     reaxt_actions::wire_struct!(Visitor { id: String, visits: u32 });
     const VISITOR: reaxt_actions::Action<VisitorKey, Visitor> = reaxt_actions::Action::new("demo.v1.Greeter", "GetVisitor");
+    // 変更(書き込み)が型付きの`Visitor`を返す例: 書いた直後の値と、別サブグラフの`count`を1回の質問で受け取れる
+    const TOUCH: reaxt_actions::Action<VisitorKey, Visitor> = reaxt_actions::Action::new("demo.v1.Greeter", "Touch");
     let port = std::env::args().nth(1).unwrap_or_else(|| "8766".into());
     let visits = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let (v, v2, v3) = (visits.clone(), visits.clone(), visits.clone());
+    let (v, v2, v3, v4) = (visits.clone(), visits.clone(), visits.clone(), visits.clone());
     let app = App::new("Reaxt greeter")
         .global_guard(reaxt_actions::csrf_guard)
         .module(
@@ -36,6 +38,7 @@ fn main() {
                 .action(&VISIT, move |_, _: ()| Ok(v.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1))
                 // `Get*` は GraphQL の Query として公開される(読み取り用)
                 .action(&VISITS, move |_, _: ()| Ok(v2.load(std::sync::atomic::Ordering::SeqCst)))
+                .action(&TOUCH, move |_, k: VisitorKey| Ok(Visitor { id: k.id, visits: v4.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 }))
                 .entity(&VISITOR, move |_, k: VisitorKey| Ok(Visitor { id: k.id, visits: v3.load(std::sync::atomic::Ordering::SeqCst) })),
         )
         .finish();

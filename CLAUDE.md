@@ -105,3 +105,6 @@ Rust だけで書くフロント+バックエンド統合の枠組み。RPoem(�
 **Осталось**: настоящий Cosmo Router, настоящие PostgreSQL/CockroachDB, TLS, драйверы MySQL/Oracle/Snowflake и развёртывание на SET.
 **Добавлено (2026-11-19)**: хуки (`use_ref`, `use_memo`, `use_reducer`, `use_effect` и другие), контекст, `memo`, Fragment, Suspense, границы ошибок, сигналы в стиле Solid (с `batch`), названия в стиле Vue и Preact, а также `wasm::portal`. Потоковый SSR теперь **по-настоящему асинхронный**: оболочка отправляется сразу, не дожидаясь ничего, каждая граница выполняется параллельно и подставляется по мере готовности, а граница, превысившая срок, заменяется запасным содержимым (`App::stream_async`, отправка по настоящему HTTP через `reaxt-rpoem`; в настоящем браузере оболочка появилась через 15 мс, A — через 1023 мс, B — через 2015 мс). Синхронный хост отвечает 501. Ещё не проверено: автоматический тест прерывания при отключении клиента; класс `Component` из Preact не поддерживается.
 
+
+## 3姉妹リポジトリ(2026-11-19、常に同時開発)
+Reaxt / [`RPoRea`](https://github.com/aon-co-jp/RPoRea)(RPoem+Reaxtの融合、新設)/ [`open-cosmo`](https://github.com/aon-co-jp/open-cosmo)(WunderGraph Cosmo相当。GitHub上の正式名称は`open-cosmo`と確認済み)。接点(サブグラフ形式・manifest・Connect・`x-reaxt`)を変えたら3つのCLAUDE.mdを同じ日に更新する。約束と接点の現状は RPoRea の `docs/THREE-SISTERS.md`。最優先の未了は、open-cosmo のルーターへ Reaxt のサブグラフを実際に合成させる確認。

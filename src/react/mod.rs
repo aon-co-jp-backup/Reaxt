@@ -3,6 +3,7 @@ pub mod app;
 pub mod boundary;
 pub mod diff;
 pub mod hooks;
+pub mod preact;
 pub mod signals;
 pub mod vue;
 pub mod vnode;

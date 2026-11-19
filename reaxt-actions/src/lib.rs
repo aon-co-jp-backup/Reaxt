@@ -225,7 +225,11 @@ pub use rust_json::quote_json;
 
 /// 必須フィールドを任意の`Wire`型で取り出す(`wire_struct!`が使う)。
 pub fn field<T: Wire>(v: &LightValue, k: &str) -> Result<T, String> {
-    T::from_wire(v.get(k).ok_or_else(|| format!("フィールド {k} がありません"))?).map_err(|e| format!("{k}: {e}"))
+    match v.get(k) {
+        Some(x) => T::from_wire(x).map_err(|e| format!("{k}: {e}")),
+        // 無いフィールドは `null` として読む。`Option<T>` なら None、それ以外は従来どおりエラー。
+        None => T::from_wire(&LightValue::Null).map_err(|_| format!("フィールド {k} がありません")),
+    }
 }
 
 /// 名前付きフィールドの構造体に`Wire`を実装する(各フィールドも`Wire`であること)。
@@ -317,6 +321,21 @@ mod tests {
         ids: Vec<u8>,
     }
     crate::wire_struct!(Mixed { name: String, on: bool, ids: Vec<u8> });
+
+    #[test]
+    fn missing_field_is_none_for_option_and_error_otherwise() {
+        #[derive(Debug)]
+        struct P {
+            a: u32,
+            b: Option<String>,
+        }
+        wire_struct!(P { a: u32, b: Option<String> });
+        let p: P = decode("{\"a\":1}").unwrap();
+        assert_eq!((p.a, p.b), (1, None));
+        let p: P = decode("{\"a\":1,\"b\":\"x\"}").unwrap();
+        assert_eq!(p.b.as_deref(), Some("x"));
+        assert!(decode::<P>("{\"b\":\"x\"}").unwrap_err().contains("a"));
+    }
 
     #[test]
     fn wire_struct_round_trips_and_rejects() {

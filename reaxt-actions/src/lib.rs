@@ -117,6 +117,8 @@ pub enum GqlType {
     /// 構造を持たない(GraphQLの `JSON` スカラー)。
     Json,
     Int,
+    /// 小数(`f64`)。
+    Float,
     Boolean,
     Str,
     List(Box<GqlType>),
@@ -148,6 +150,18 @@ macro_rules! wire_int {
     )*};
 }
 wire_int!(u8, u16, u32, i32, i64, usize);
+impl Wire for f64 {
+    fn to_wire(&self) -> String {
+        // JSONは NaN / 無限大を表せないので null にする
+        if self.is_finite() { self.to_string() } else { "null".to_string() }
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        v.as_f64().ok_or_else(|| "数値が必要です".into())
+    }
+    fn gql_type() -> GqlType {
+        GqlType::Float
+    }
+}
 impl Wire for bool {
     fn to_wire(&self) -> String {
         self.to_string()
@@ -335,6 +349,15 @@ mod tests {
         let p: P = decode("{\"a\":1,\"b\":\"x\"}").unwrap();
         assert_eq!(p.b.as_deref(), Some("x"));
         assert!(decode::<P>("{\"b\":\"x\"}").unwrap_err().contains("a"));
+    }
+
+    #[test]
+    fn f64_round_trips_and_non_finite_is_null() {
+        assert_eq!(decode::<f64>("1.5").unwrap(), 1.5);
+        assert_eq!(2.25f64.to_wire(), "2.25");
+        assert_eq!(f64::NAN.to_wire(), "null");
+        assert!(decode::<f64>("\"x\"").is_err());
+        assert_eq!(<f64 as Wire>::gql_type(), GqlType::Float);
     }
 
     #[test]

@@ -50,6 +50,7 @@ fn gql_ref(t: &GqlType) -> String {
     match t {
         GqlType::Json => "JSON".into(),
         GqlType::Int => "Int!".into(),
+        GqlType::Float => "Float!".into(),
         GqlType::Boolean => "Boolean!".into(),
         GqlType::Str => "String!".into(),
         GqlType::List(i) => format!("[{}]!", gql_ref(i)),

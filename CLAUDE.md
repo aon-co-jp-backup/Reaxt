@@ -114,3 +114,10 @@ Reaxt / [`RPoRea`](https://github.com/aon-co-jp/RPoRea)(RPoem+Reaxtの融合、�
 - 方針: HTML5/CSS3 の使用量は極力少なく / tokio と WASM は適材適所 / REST は使わない(Connect・gRPC) / JavaScript の Rust 版も進めるが **TypeScript の Rust 版を優先**。
 - 部品ごとの現状とつなぎ方の想定は `RPoRea/docs/WEB-STACK.md`(2026-11-19 調査: `RS-TypeScript` は本日拡張し Node で実行確認、`rhtml5` はトークナイザのみ、`rcss3` はパーサー+カスケード、`RS-JavaScript` は雛形)。
 - README/CLAUDE/PORTING は更新のたびに 10 か国語で(ネイティブに近い自然さ、IT・Web に詳しい人が一般の人にも親切に)。この追記の10言語版は `RPoRea` の各文書にある。
+
+
+## 2026-11-19 追記(3姉妹の同時更新): 複数サブグラフの問い合わせ分割と `@key` 結合 / Query splitting and `@key` joins
+
+**日本語(やさしい説明)**: open-cosmo のゲートウェイが、複数のサブグラフにまたがる問い合わせを扱えるようになりました。(1) 読み取り専用の問い合わせで、ルートのフィールドが別々のサブグラフにあるときは、サブグラフごとに分けて同時に実行し、結果を1つにまとめます。(2) `@key` つきの型(エンティティ)は、サブグラフAが返した「id」を使って、別のサブグラフBの `_entities` に問い合わせ、足りないフィールドを足します(1段のみ)。変更系(mutation)をまたぐ問い合わせ、リモートとローカルの混在、フラグメント/ディレクティブつきは、従来どおり拒否します。試験はゲートウェイ44件・federation13件が成功(擬似サブグラフでの確認。Reaxt実機を複数並べた通しは未了)。Reaxt のサブグラフ(`_service{sdl}`・`__schema`)はそのまま対応しており、Reaxt側の変更は不要でした。
+**English (simple)**: The open-cosmo gateway now handles queries that span several subgraphs. (1) A read-only query whose root fields live in different subgraphs is split, run at the same time, and merged. (2) For a type with `@key` (an entity), the gateway takes the id returned by subgraph A and asks subgraph B through `_entities` for the missing fields (one level only). Mutations across subgraphs, a mix of remote and local fields, and fragments/directives are still rejected. Tests pass (gateway 44, federation 13) against fake subgraphs; a run with several real Reaxt servers is not done yet. Reaxt's subgraph (`_service{sdl}`, `__schema`) already works, so Reaxt needed no change.
+**未了 / Open**: 複数段の入れ子の結合・`@requires`/`@provides`・実Reaxtを複数並べた通し・ミューテーション後の再取得。Nested (multi-level) joins, `@requires`/`@provides`, a real multi-Reaxt run.

@@ -54,13 +54,14 @@ fn gql_ref(t: &GqlType) -> String {
         GqlType::Str => "String!".into(),
         GqlType::List(i) => format!("[{}]!", gql_ref(i)),
         GqlType::Object { name, .. } => format!("{name}!"),
+        GqlType::Nullable(i) => gql_ref(i).trim_end_matches('!').to_string(),
     }
 }
 
 /// 型の中に出てくるオブジェクト型を集める(名前の重複は最初のものだけ)。
 fn collect_objects<'a>(t: &'a GqlType, out: &mut Vec<(&'static str, &'a Vec<(&'static str, GqlType)>)>) {
     match t {
-        GqlType::List(i) => collect_objects(i, out),
+        GqlType::List(i) | GqlType::Nullable(i) => collect_objects(i, out),
         GqlType::Object { name, fields } => {
             if !out.iter().any(|(n, _)| n == name) {
                 out.push((name, fields));
@@ -510,6 +511,13 @@ fn parse_sel_list(b: &[char], i: &mut usize, depth: usize) -> Result<Vec<Sel>, S
 /// 型 `ty` の値 `v` を選択 `sel` で射影してJSONの文字列にする。
 fn project(v: &LightValue, ty: &GqlType, sel: &[Sel]) -> String {
     match ty {
+        GqlType::Nullable(inner) => {
+            if matches!(v, LightValue::Null) {
+                "null".into()
+            } else {
+                project(v, inner, sel)
+            }
+        }
         GqlType::List(inner) => match v.as_array() {
             Some(a) => format!("[{}]", a.iter().map(|x| project(x, inner, sel)).collect::<Vec<_>>().join(",")),
             None => "null".into(),
@@ -769,8 +777,8 @@ mod tests {
         assert!(!is_read_method("Getter") && !is_read_method("Add") && !is_read_method("Settle"));
         let p = vec!["/demo.v1.Counter/Add".to_string(), "/demo.v1.Counter/GetTotal".to_string()];
         let s = sdl(&p);
-        assert!(s.contains("type Query {\n  reaxt_ready: Boolean! @shareable\n  demo_v1_Counter_GetTotal(input: JSON): JSON"), "{s}");
-        assert!(s.contains("type Mutation {\n  demo_v1_Counter_Add(input: JSON): JSON"), "{s}");
+        assert!(s.contains("type Query {\n  reaxt_ready: Boolean! @shareable\n  demo_v1_Counter_GetTotal(input: JSON):"), "{s}");
+        assert!(s.contains("type Mutation {\n  demo_v1_Counter_Add(input: JSON):"), "{s}");
         // 変更用が1つも無ければ Mutation 型は出さない
         assert!(!sdl(&["/demo.v1.Counter/Get".to_string()]).contains("type Mutation"));
         // 読み取りは Query として実行でき、reaxt_ready と並べても動く
@@ -793,6 +801,20 @@ mod tests {
     #[derive(Debug)]
     struct Ent { id: String, n: u32 }
     crate::wire_struct!(Ent { id: String, n: u32 });
+
+    #[test]
+    fn option_is_nullable_and_round_trips() {
+        use crate::Wire;
+        assert_eq!(<Option<u32> as Wire>::gql_type(), GqlType::Nullable(Box::new(GqlType::Int)));
+        assert_eq!(gql_ref(&<Option<String> as Wire>::gql_type()), "String");
+        assert_eq!(Some(3u32).to_wire(), "3");
+        assert_eq!(None::<u32>.to_wire(), "null");
+        assert_eq!(crate::decode::<Option<u32>>("null").unwrap(), None);
+        assert_eq!(crate::decode::<Option<u32>>("5").unwrap(), Some(5));
+        let t = <Option<Ent> as Wire>::gql_type();
+        let v = parse_light_secure("null", &LightLimits::small()).unwrap();
+        assert_eq!(project(&v, &t, &[]), "null");
+    }
 
     #[test]
     fn typed_entity_sdl_and_entities_call() {

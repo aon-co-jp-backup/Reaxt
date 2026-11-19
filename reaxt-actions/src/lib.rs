@@ -120,6 +120,8 @@ pub enum GqlType {
     Boolean,
     Str,
     List(Box<GqlType>),
+    /// 値が無い(null)こともある(`Option<T>`)。
+    Nullable(Box<GqlType>),
     /// 名前付きフィールドの構造体(`wire_struct!`)。
     Object { name: &'static str, fields: Vec<(&'static str, GqlType)> },
 }
@@ -177,6 +179,22 @@ impl<T: Wire> Wire for Vec<T> {
     }
     fn gql_type() -> GqlType {
         GqlType::List(Box::new(T::gql_type()))
+    }
+}
+
+impl<T: Wire> Wire for Option<T> {
+    fn to_wire(&self) -> String {
+        self.as_ref().map_or_else(|| "null".to_string(), Wire::to_wire)
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        if matches!(v, LightValue::Null) {
+            Ok(None)
+        } else {
+            T::from_wire(v).map(Some)
+        }
+    }
+    fn gql_type() -> GqlType {
+        GqlType::Nullable(Box::new(T::gql_type()))
     }
 }
 

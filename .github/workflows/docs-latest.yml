@@ -57,8 +57,7 @@ jobs:
                 name="${os%%|*}"; exts="${os#*|}"
                 rows=""
                 for e in $exts; do
-                  rows="$rows$(echo "$rel" | jq -r --arg e ".$e" '.assets[] | select(.name|ascii_downcase|endswith($e)) | "| [\(.name)](\(.browser_download_url)) | \(.size/1048576*10|floor/10) MB | \((.digest // "-")|sub("^sha256:";"")) |"')"$'
-'
+                  rows="$rows$(echo "$rel" | jq -r --arg e ".$e" '.assets[] | select(.name|ascii_downcase|endswith($e)) | "| [\(.name)](\(.browser_download_url)) | \(.size/1048576*10|floor/10) MB | \((.digest // "-")|sub("^sha256:";"")) |"')"$'\n'
                 done
                 rows=$(printf '%s' "$rows" | sed '/^$/d' | sort -u)
                 if [ -n "$rows" ]; then

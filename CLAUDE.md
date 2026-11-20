@@ -612,3 +612,18 @@ We verified the join not only with fake subgraphs but also with **independent, r
 - **やさしい説明**: `examples/counter/e2e_gateway.sh` を21項目に増やし、すべて成功しました。壊れたJSON・文法エラー・40件の同時リクエスト・片方のサーバー停止(エラーは返るが、ゲートウェイは落ちず、もう片方は答え続ける)を確かめました。
 - **見つけた不具合を直しました**: 問い合わせに複数の操作があり `operationName` で選んでも、Reaxtのサーバーが先頭の操作を実行していました。選ばれた操作だけを実行するようにしました(単体試験を追加、18→19件)。
 - **English**: The real end-to-end script now has 21 checks and all pass: malformed JSON, syntax errors, 40 concurrent requests, and one subgraph going down (an error is returned, the gateway stays up, and the other server keeps answering). It also found a bug, now fixed: with several operations in one document, a Reaxt server ran the first one and ignored `operationName`. It now runs only the selected operation (one unit test added, 19 in total).
+
+
+## 2026-11-20 v0.1.1: `operationName` fix and wider gateway checks / `operationName` の修正と広いゲートウェイ試験
+
+### 日本語(やさしい説明)
+- **直したこと**: 1つの問い合わせに操作が複数あり、`operationName` で1つを選んでも、先頭の操作が実行されていました。選んだ操作だけを実行するように直しました(`reaxt-actions/src/subgraph.rs` の `select_operation_text`)。フラグメントは残します。操作が1つだけ、または名前が見つからないときは、これまでどおり問い合わせ全体を使います。
+- **試験**: `reaxt-actions` の単体試験は19件成功。`examples/counter/e2e_gateway.sh` は、本物のサーバー2つをゲートウェイ(open-cosmo)の後ろに置き、21項目すべて成功です(壊れたJSON、文法エラー、40件の同時結合、片方のサーバー停止を含む)。
+- **リリース**: v0.1.1(`operationName` の修正を含む)。v0.1.0 にはこの修正が入っていません。
+- **まだ**: Reaxt の複雑な型(`Option` の入れ子、`HashMap` など)、iPhone・Mac の実機確認(実機なし。CIでビルドとテストは確認済み)。
+
+### English
+- **Fixed**: when a query held several operations and `operationName` picked one, the subgraph still ran the first one. It now runs only the selected operation (`select_operation_text` in `reaxt-actions/src/subgraph.rs`) and keeps the fragments. With a single operation, or a name that matches nothing, the whole query is used as before.
+- **Tests**: 19 unit tests pass in `reaxt-actions`. `examples/counter/e2e_gateway.sh` puts two real servers behind the open-cosmo gateway and all 21 checks pass (malformed JSON, syntax errors, 40 concurrent joins, and one server going down).
+- **Release**: v0.1.1 includes the `operationName` fix; v0.1.0 does not.
+- **Still open**: richer Reaxt types (nested `Option`, `HashMap`, and so on), and real-device checks on iPhone and Mac (we have no devices; CI covers build and tests).

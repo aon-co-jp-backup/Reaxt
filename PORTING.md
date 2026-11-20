@@ -603,3 +603,18 @@ We verified the join not only with fake subgraphs but also with **independent, r
 - So **running on a Mac (a real call through Python) and building for iPhone are now confirmed in CI**. Android also passed the real-phone test. We have not checked by eye on a real iPhone or a real Mac, because we have no such devices.
 - Why CI tripped, and the fix: RPoRea uses sibling repositories through relative paths, so CI also checks out `Reaxt`, `RPoem`, `RS-JSON`, `open-web-server`, `RS-SmartTCP`, `open-raid-z`, `open-cpu`, `open-cuda` and `open-directx` into the same parent folder (`working-directory: RPoRea`). If RPoRea starts using another sibling repository, add it to `ci.yml`.
 - **Still open**: scheduled cloud runs (first connect GitHub to Claude), and real-device checks on iPhone and Mac.
+
+
+## 2026-11-20 v0.1.1: `operationName` fix and wider gateway checks / `operationName` の修正と広いゲートウェイ試験
+
+### 日本語(やさしい説明)
+- **直したこと**: 1つの問い合わせに操作が複数あり、`operationName` で1つを選んでも、先頭の操作が実行されていました。選んだ操作だけを実行するように直しました(`reaxt-actions/src/subgraph.rs` の `select_operation_text`)。フラグメントは残します。操作が1つだけ、または名前が見つからないときは、これまでどおり問い合わせ全体を使います。
+- **試験**: `reaxt-actions` の単体試験は19件成功。`examples/counter/e2e_gateway.sh` は、本物のサーバー2つをゲートウェイ(open-cosmo)の後ろに置き、21項目すべて成功です(壊れたJSON、文法エラー、40件の同時結合、片方のサーバー停止を含む)。
+- **リリース**: v0.1.1(`operationName` の修正を含む)。v0.1.0 にはこの修正が入っていません。
+- **まだ**: Reaxt の複雑な型(`Option` の入れ子、`HashMap` など)、iPhone・Mac の実機確認(実機なし。CIでビルドとテストは確認済み)。
+
+### English
+- **Fixed**: when a query held several operations and `operationName` picked one, the subgraph still ran the first one. It now runs only the selected operation (`select_operation_text` in `reaxt-actions/src/subgraph.rs`) and keeps the fragments. With a single operation, or a name that matches nothing, the whole query is used as before.
+- **Tests**: 19 unit tests pass in `reaxt-actions`. `examples/counter/e2e_gateway.sh` puts two real servers behind the open-cosmo gateway and all 21 checks pass (malformed JSON, syntax errors, 40 concurrent joins, and one server going down).
+- **Release**: v0.1.1 includes the `operationName` fix; v0.1.0 does not.
+- **Still open**: richer Reaxt types (nested `Option`, `HashMap`, and so on), and real-device checks on iPhone and Mac (we have no devices; CI covers build and tests).

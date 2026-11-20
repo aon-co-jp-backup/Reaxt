@@ -607,3 +607,8 @@ We verified the join not only with fake subgraphs but also with **independent, r
 - So **running on a Mac (a real call through Python) and building for iPhone are now confirmed in CI**. Android also passed the real-phone test. We have not checked by eye on a real iPhone or a real Mac, because we have no such devices.
 - Why CI tripped, and the fix: RPoRea uses sibling repositories through relative paths, so CI also checks out `Reaxt`, `RPoem`, `RS-JSON`, `open-web-server`, `RS-SmartTCP`, `open-raid-z`, `open-cpu`, `open-cuda` and `open-directx` into the same parent folder (`working-directory: RPoRea`). If RPoRea starts using another sibling repository, add it to `ci.yml`.
 - **Still open**: scheduled cloud runs (first connect GitHub to Claude), and real-device checks on iPhone and Mac.
+
+## 2026-11-20 追記: ゲートウェイの広い実機試験(日本語・English)
+- **やさしい説明**: `examples/counter/e2e_gateway.sh` を21項目に増やし、すべて成功しました。壊れたJSON・文法エラー・40件の同時リクエスト・片方のサーバー停止(エラーは返るが、ゲートウェイは落ちず、もう片方は答え続ける)を確かめました。
+- **見つけた不具合を直しました**: 問い合わせに複数の操作があり `operationName` で選んでも、Reaxtのサーバーが先頭の操作を実行していました。選ばれた操作だけを実行するようにしました(単体試験を追加、18→19件)。
+- **English**: The real end-to-end script now has 21 checks and all pass: malformed JSON, syntax errors, 40 concurrent requests, and one subgraph going down (an error is returned, the gateway stays up, and the other server keeps answering). It also found a bug, now fixed: with several operations in one document, a Reaxt server ran the first one and ignored `operationName`. It now runs only the selected operation (one unit test added, 19 in total).

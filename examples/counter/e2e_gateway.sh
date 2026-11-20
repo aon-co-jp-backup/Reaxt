@@ -33,4 +33,15 @@ r=$(q '{"query":"mutation { t: demo_v1_Greeter_Touch(input:{id:\"x\"}) { visits 
 r=$(q '{"query":"mutation { demo_v1_Greeter_Visit demo_v1_Counter_Inc }"}'); check "mutation across servers is refused" "$r" 'only read-only queries'
 r=$(q '{"query":"{ no_such_field }"}'); check "unknown field is an error" "$r" 'errors'
 r=$(curl -s -XPOST localhost:8793/_reaxt/graphql -H 'content-type: text/plain' -d '{"query":"mutation { demo_v1_Greeter_Visit }"}'); check "subgraph action without x-reaxt is refused (CSRF)" "$r" 'missing x-reaxt header' '"demo_v1_Greeter_Visit":3'
+# --- 広い試験: 不正入力・並行・障害 / Wider checks: bad input, concurrency, outage ---
+r=$(curl -s -XPOST localhost:8099/graphql -H 'content-type: application/json' -d '{not json'); check "malformed JSON body does not crash" "$r" 'error'
+r=$(q '{"query":"{ demo_v1_Greeter_GetVisits "}'); check "GraphQL syntax error is an error" "$r" 'errors'
+r=$(q '{"query":"query A { demo_v1_Greeter_GetVisits } query B { demo_v1_Counter_GetCount }","operationName":"B"}'); check "operationName selects the operation" "$r" 'demo_v1_Counter_GetCount' 'GetVisits'
+ok=0; W=""; for i in $(seq 1 40); do q '{"query":"{ v: demo_v1_Greeter_GetVisitor(input:{id:\"c\"}) { id visits count } }"}' > /tmp/e2e_c_$i.out & W="$W $!"; done; wait $W
+for i in $(seq 1 40); do grep -q '"count":0' /tmp/e2e_c_$i.out && ok=$((ok+1)); rm -f /tmp/e2e_c_$i.out; done
+[ $ok -eq 40 ] && echo "ok   40 concurrent joins" || { echo "FAIL concurrent joins: $ok/40"; fail=$((fail+1)); }
+kill $P2 2>/dev/null; sleep 1
+r=$(q '{"query":"{ a: demo_v1_Greeter_GetVisits }"}'); check "subgraph outage gives an error, not a hang" "$r" 'error'
+r=$(q '{"query":"{ b: demo_v1_Counter_GetCount }"}'); check "other subgraph still answers during outage" "$r" '"b":0'
+r=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 localhost:8099/graphql -XPOST -H 'content-type: application/json' -d '{"query":"{ b: demo_v1_Counter_GetCount }"}'); check "gateway still alive" "$r" '200'
 echo; [ $fail -eq 0 ] && echo "ALL OK" || { echo "FAILED: $fail"; exit 1; }

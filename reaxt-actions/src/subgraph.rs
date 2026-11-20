@@ -151,6 +151,29 @@ struct Root {
 }
 
 /// 問い合わせ文字列から、ルートのフィールド(別名・名前・`input: $v`)を取り出す。
+/// `operationName` で選ばれた操作だけを残す(他の操作は捨て、フラグメントは残す)。
+/// 名前が見つからない/操作が1つだけなら、元の問い合わせをそのまま返す。
+fn select_operation_text(q: &str, name: &str) -> String {
+    let chars: Vec<char> = q.chars().collect();
+    let (mut defs, mut depth, mut start, mut i) = (Vec::<String>::new(), 0i32, 0usize, 0usize);
+    while i < chars.len() {
+        match chars[i] {
+            '#' => while i < chars.len() && chars[i] != '\n' { i += 1 },
+            '"' => { i += 1; while i < chars.len() && chars[i] != '"' { if chars[i] == '\\' { i += 1 } i += 1 } }
+            '{' => depth += 1,
+            '}' => { depth -= 1; if depth == 0 { defs.push(chars[start..=i].iter().collect()); start = i + 1; } }
+            _ => {}
+        }
+        i += 1;
+    }
+    let is_op = |d: &str| { let t = d.trim_start(); t.starts_with("query") || t.starts_with("mutation") || t.starts_with("subscription") };
+    let ops: Vec<&String> = defs.iter().filter(|d| is_op(d)).collect();
+    if ops.len() < 2 { return q.to_string(); }
+    let named = |d: &str| d.trim_start().split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).nth(1).map_or(false, |n| n == name);
+    if !ops.iter().any(|d| named(d)) { return q.to_string(); }
+    defs.iter().filter(|d| !is_op(d) || named(d)).cloned().collect::<Vec<_>>().join("\n")
+}
+
 fn parse_roots(q: &str) -> Result<Vec<Root>, String> {
     let b: Vec<char> = q.chars().collect();
     let mut i = 0;
@@ -747,7 +770,11 @@ pub fn execute(body: &str, paths: &[String], call: &dyn Fn(&str, &str) -> (u16, 
             ),
         );
     }
-    let roots = match parse_roots(query) {
+    let selected = match v.get("operationName").and_then(|n| n.as_str()) {
+        Some(n) if !n.is_empty() => select_operation_text(query, n),
+        _ => query.to_string(),
+    };
+    let roots = match parse_roots(&selected) {
         Ok(r) => r,
         Err(e) => return (200, format!("{{\"data\":null,\"errors\":[{}]}}", gql_error(&e, "invalid_argument", 400))),
     };
@@ -854,6 +881,15 @@ mod tests {
         let s = sdl(&paths());
         assert!(s.contains("demo_v1_Counter_Add(input: JSON):"));
         assert!(s.contains("scalar JSON"));
+    }
+
+    #[test]
+    fn operation_name_selects_one_operation_and_keeps_fragments() {
+        let q = "query A { a } query B { b ...F } fragment F on T { x }";
+        let s = select_operation_text(q, "B");
+        assert!(s.contains("query B") && s.contains("fragment F") && !s.contains("query A"));
+        assert_eq!(select_operation_text(q, "Z"), q); // 名前が無ければ元のまま
+        assert_eq!(select_operation_text("{ a }", "B"), "{ a }");
     }
 
     #[test]

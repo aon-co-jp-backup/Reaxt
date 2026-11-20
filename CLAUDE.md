@@ -631,3 +631,8 @@ We verified the join not only with fake subgraphs but also with **independent, r
 ## 2026-11-20 低VRAM・VRAM無し端末(VPS・PC・タブレット・スマホ)でのAI/LLMのノウハウ / Low-VRAM AI know-how
 日本語: AI・LLMを使う機能(推論・要約・補完・OCR等)は、[aruaru-llm/docs/LOW-VRAM-KNOWHOW.md](https://github.com/aon-co-jp/aruaru-llm/blob/main/docs/LOW-VRAM-KNOWHOW.md) に従う: 短い文脈・上限・タイムアウト、VPSで重い推論を直接回さない、メモリが足りなければ小さいモデルへ自動で下げる。広い桁(FP64以上)は本番で使わず、試験の正解にだけ使う。
 English: Features that use AI/LLMs follow the file above: short context, caps and timeouts, no heavy inference directly on the VPS, auto-downgrade to a smaller model when memory is short. Wide floats (FP64 and above) are for test oracles only, not production.
+
+
+## 2026-11-20 追記: `HashMap` と入れ子の型 / `HashMap` and nested types
+- **日本語**: `Wire` が `HashMap<String, T>` に対応しました(出力はキーを並べ替えるので毎回同じ順)。`Option` と `Vec` と連想配列の入れ子(例: `HashMap<String, Vec<Option<i64>>>`)も往復できることを試験しました(20件成功)。注意: `Option<Option<T>>` は null が区別できないので使わないでください。
+- **English**: `Wire` now supports `HashMap<String, T>` (keys are sorted on output, so the order is stable). Nested mixes of `Option`, `Vec` and maps (for example `HashMap<String, Vec<Option<i64>>>`) round-trip in tests (20 pass). Note: avoid `Option<Option<T>>`, because null cannot tell the two levels apart.

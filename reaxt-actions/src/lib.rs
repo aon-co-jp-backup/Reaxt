@@ -226,6 +226,21 @@ impl<T: Wire> Wire for std::collections::BTreeMap<String, T> {
     }
 }
 
+/// `HashMap<String, T>` も同じ扱い。出力はキーを並べ替えるので、順序は毎回同じになる。
+impl<T: Wire> Wire for std::collections::HashMap<String, T> {
+    fn to_wire(&self) -> String {
+        let sorted: std::collections::BTreeMap<&String, &T> = self.iter().collect();
+        let parts: Vec<String> = sorted.iter().map(|(k, v)| format!("{}:{}", rust_json::quote_json(k), v.to_wire())).collect();
+        format!("{{{}}}", parts.join(","))
+    }
+    fn from_wire(v: &LightValue) -> Result<Self, String> {
+        match v {
+            LightValue::Object(fields) => fields.iter().map(|(k, x)| T::from_wire(x).map(|t| (k.clone(), t)).map_err(|e| format!("{k}: {e}"))).collect(),
+            _ => Err("オブジェクトが必要です".into()),
+        }
+    }
+}
+
 /// 上限つきでJSON本文を読んで`T`にする。
 pub fn decode<T: Wire>(json: &str) -> Result<T, String> {
     let v = parse_light_secure(json, &LightLimits::small()).map_err(|e| e.to_string())?;
@@ -349,6 +364,18 @@ mod tests {
         ids: Vec<u8>,
     }
     crate::wire_struct!(Mixed { name: String, on: bool, ids: Vec<u8> });
+
+    #[test]
+    fn richer_types_round_trip() {
+        use std::collections::HashMap;
+        let m: HashMap<String, Vec<Option<i64>>> = decode(r#"{"b":[1,null],"a":[]}"#).unwrap();
+        assert_eq!(m["b"], vec![Some(1), None]);
+        assert_eq!(m.to_wire(), r#"{"a":[],"b":[1,null]}"#);
+        let o: Option<Vec<Option<String>>> = decode(r#"["x",null]"#).unwrap();
+        assert_eq!(o, Some(vec![Some("x".into()), None]));
+        assert_eq!(decode::<Option<Vec<i64>>>("null").unwrap(), None);
+        assert!(decode::<HashMap<String, i64>>(r#"{"k":"no"}"#).is_err());
+    }
 
     #[test]
     fn missing_field_is_none_for_option_and_error_otherwise() {

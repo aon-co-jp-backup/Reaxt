@@ -457,3 +457,8 @@ We verified the join not only with fake subgraphs but also with **independent, r
 - **Tests**: 19 unit tests pass in `reaxt-actions`. `examples/counter/e2e_gateway.sh` puts two real servers behind the open-cosmo gateway and all 21 checks pass (malformed JSON, syntax errors, 40 concurrent joins, and one server going down).
 - **Release**: v0.1.1 includes the `operationName` fix; v0.1.0 does not.
 - **Still open**: richer Reaxt types (nested `Option`, `HashMap`, and so on), and real-device checks on iPhone and Mac (we have no devices; CI covers build and tests).
+
+
+## 2026-11-20 v0.1.2: `HashMap` support / `HashMap` に対応
+- **日本語**: v0.1.2 で `Wire` が `HashMap<String, T>` に対応しました(出力はキー順)。入れ子の型(`Option`・`Vec`・連想配列の組み合わせ)も試験済みです(20件成功)。`Option<Option<T>>` は null を区別できないので使わないでください。
+- **English**: v0.1.2 adds `Wire` support for `HashMap<String, T>` (keys are sorted on output). Nested mixes of `Option`, `Vec` and maps are tested too (20 tests pass). Avoid `Option<Option<T>>`, since null cannot tell the two levels apart.
